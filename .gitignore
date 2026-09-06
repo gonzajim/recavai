@@ -6,3 +6,5 @@ venv/
 # archivos temporales y caches
 __pycache__/
 *.py[cod]
+.firebase/
+node_modules/
