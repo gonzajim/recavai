@@ -51,25 +51,26 @@ firestore_db = firestore.client()
 # =============================================================================
 # 1) CORS y Rate Limiting
 # =============================================================================
-_allowed_origins_str = os.getenv(
-    "CORS_ORIGINS",
-    "https://recava-auditor-dev.web.app,https://recava-auditor.web.app,http://localhost:8000",
-)
+_DEFAULT_ALLOWED_ORIGINS = [
+    "https://recava-auditor-dev.web.app",
+    "https://recava-auditor.web.app",
+    # Admin panels (React app en public/admin-panel) — orígenes separados del chatbot.
+    "https://recava-auditor-dev-panel.web.app",
+    "https://recava-auditor-panel.web.app",
+    "http://localhost:8000",
+]
+_allowed_origins_str = os.getenv("CORS_ORIGINS", ",".join(_DEFAULT_ALLOWED_ORIGINS))
 _allowed_origins = [o.strip() for o in _allowed_origins_str.split(",") if o.strip()]
 
 if not _allowed_origins or "*" in _allowed_origins:
-    _allowed_origins = [
-        "https://recava-auditor-dev.web.app",
-        "https://recava-auditor.web.app",
-        "http://localhost:8000",
-    ]
+    _allowed_origins = _DEFAULT_ALLOWED_ORIGINS
     logger.warning("CORS_ORIGINS no definida o '*', usando defaults seguros: %s", _allowed_origins)
 
 CORS(
     app,
     origins=_allowed_origins,
     supports_credentials=True,
-    methods=["GET", "POST", "OPTIONS"],
+    methods=["GET", "POST", "PATCH", "DELETE", "OPTIONS"],
     allow_headers=["Authorization", "Content-Type", "Idempotency-Key"],
     expose_headers=["X-Request-Id"],
     max_age=86400,
