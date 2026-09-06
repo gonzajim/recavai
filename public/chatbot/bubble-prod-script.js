@@ -10,11 +10,29 @@ document.addEventListener('DOMContentLoaded', function () {
     appId: "1:370417116045:web:41c77969d5d880382d93c4",
     measurementId: "G-2J8TTR4SD2"
   };
-  firebase.initializeApp(firebaseConfig);
-  const auth = firebase.auth();
+  let auth;
+  try {
+    firebase.initializeApp(firebaseConfig);
+    auth = firebase.auth();
 
-  if (location.hostname === 'localhost') {
-    firebase.auth().useEmulator('http://localhost:9099/');
+    if (location.hostname === 'localhost') {
+      firebase.auth().useEmulator('http://localhost:9099/');
+    }
+  } catch (initErr) {
+    // Si Firebase no carga (bloqueador de anuncios/privacidad, red corporativa,
+    // extensión del navegador, etc.) los botones de login/registro quedaban
+    // "muertos" sin ningún aviso. Mostramos un mensaje visible en vez de fallar en silencio.
+    console.error('No se pudo inicializar Firebase Auth:', initErr);
+    const loginBox = document.querySelector('#login-view .login-box, #login-container .login-box');
+    if (loginBox) {
+      loginBox.innerHTML =
+        '<p class="error-message" style="display:block;">' +
+        'No se pudo cargar el servicio de acceso. Puede deberse a un bloqueador de anuncios/privacidad ' +
+        'o a un problema de red — desactívalo para este sitio y recarga la página. ' +
+        'Si el problema persiste, contacta con el administrador.' +
+        '</p>';
+    }
+    return; // sin `auth` nada del resto del script puede funcionar
   }
 
   // Endpoints por entorno
