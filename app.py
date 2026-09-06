@@ -137,6 +137,38 @@ def require_firebase_user_or_403():
     return decoded
 
 
+# Único administrador autorizado a gestionar usuarios. Cambiar aquí si se añaden más.
+_ADMIN_EMAILS = {"gonzalo.jimenez.martin@gmail.com"}
+
+
+def require_admin_or_403():
+    """Como require_firebase_user_or_403, pero exige además que el email
+    esté en _ADMIN_EMAILS. Usar para cualquier endpoint de administración."""
+    decoded = require_firebase_user_or_403()
+    email = (decoded.get("email") or "").lower()
+    if email not in _ADMIN_EMAILS:
+        logger.warning("Admin: acceso denegado a %s", email)
+        abort(403, description="Acceso restringido a administradores.")
+    return decoded
+
+
+_MAX_ADMIN_USERS_LISTED = 1000
+
+
+def _serialize_fb_user(u) -> dict:
+    meta = u.user_metadata
+    return {
+        "uid": u.uid,
+        "email": u.email,
+        "display_name": u.display_name,
+        "email_verified": u.email_verified,
+        "disabled": u.disabled,
+        "created_at": getattr(meta, "creation_timestamp", None),
+        "last_sign_in_at": getattr(meta, "last_sign_in_timestamp", None),
+        "is_admin": (u.email or "").lower() in _ADMIN_EMAILS,
+    }
+
+
 def _build_user_metadata(decoded_user: dict) -> dict:
     user_id = decoded_user.get("user_id") or decoded_user.get("uid")
     return {
@@ -586,6 +618,144 @@ def delete_user_file(doc_id: str):
     except Exception as e:
         logger.error("/user_files DELETE: uid=%s doc_id=%s error=%s", uid, doc_id, e, exc_info=True)
         return fail("Error al eliminar el documento.", 500, details=str(e))
+
+
+@limiter.limit("10/minute")
+@app.route("/admin/users", methods=["POST"])
+def admin_create_user():
+    """Creates a new Firebase Auth user (admin only)."""
+    decoded_admin = require_admin_or_403()
+
+    if request.content_type != "application/json":
+        return fail("Content-Type must be application/json", 415)
+    data = request.get_json(silent=True) or {}
+
+    email = (data.get("email") or "").strip().lower()
+    password = data.get("password") or ""
+    display_name = (data.get("display_name") or "").strip() or None
+
+    if not email or "@" not in email:
+        return fail("Email inválido.", 400)
+    if len(password) < 6:
+        return fail("La contraseña debe tener al menos 6 caracteres.", 400)
+
+    try:
+        kwargs = {
+            "email": email,
+            "password": password,
+            "email_verified": bool(data.get("email_verified", False)),
+        }
+        if display_name:
+            kwargs["display_name"] = display_name
+        new_user = fb_auth.create_user(**kwargs)
+        logger.info(
+            "/admin/users POST: admin=%s created uid=%s email=%s",
+            decoded_admin.get("email"), new_user.uid, email,
+        )
+        return ok({"user": _serialize_fb_user(fb_auth.get_user(new_user.uid))})
+    except fb_auth.EmailAlreadyExistsError:
+        return fail("Ya existe una cuenta con ese correo.", 409)
+    except Exception as e:
+        logger.error("/admin/users POST: error=%s", e, exc_info=True)
+        return fail("Error al crear el usuario.", 500, details=str(e))
+
+
+@limiter.limit("30/minute")
+@app.route("/admin/users", methods=["GET"])
+def admin_list_users():
+    """Lists Firebase Auth users (admin only)."""
+    require_admin_or_403()
+    try:
+        users = []
+        for u in fb_auth.list_users().iterate_all():
+            users.append(_serialize_fb_user(u))
+            if len(users) >= _MAX_ADMIN_USERS_LISTED:
+                break
+        users.sort(key=lambda x: x.get("created_at") or 0, reverse=True)
+        return ok({"users": users})
+    except Exception as e:
+        logger.error("/admin/users GET: error=%s", e, exc_info=True)
+        return fail("Error al listar usuarios.", 500, details=str(e))
+
+
+@limiter.limit("20/minute")
+@app.route("/admin/users/<uid>", methods=["PATCH"])
+def admin_update_user(uid: str):
+    """Updates an existing Firebase Auth user (admin only): email, password,
+    display_name, disabled, email_verified. Only the provided fields change."""
+    decoded_admin = require_admin_or_403()
+
+    if request.content_type != "application/json":
+        return fail("Content-Type must be application/json", 415)
+    data = request.get_json(silent=True) or {}
+
+    kwargs = {}
+    if "email" in data:
+        email = (data.get("email") or "").strip().lower()
+        if not email or "@" not in email:
+            return fail("Email inválido.", 400)
+        kwargs["email"] = email
+    if data.get("password"):
+        if len(data["password"]) < 6:
+            return fail("La contraseña debe tener al menos 6 caracteres.", 400)
+        kwargs["password"] = data["password"]
+    if "display_name" in data:
+        kwargs["display_name"] = data.get("display_name") or None
+    if "disabled" in data:
+        kwargs["disabled"] = bool(data["disabled"])
+    if "email_verified" in data:
+        kwargs["email_verified"] = bool(data["email_verified"])
+
+    if not kwargs:
+        return fail("No se especificaron cambios.", 400)
+
+    try:
+        target = fb_auth.get_user(uid)
+    except fb_auth.UserNotFoundError:
+        return fail("Usuario no encontrado.", 404)
+
+    # No se puede deshabilitar la cuenta de administrador por accidente.
+    if (target.email or "").lower() in _ADMIN_EMAILS and kwargs.get("disabled") is True:
+        return fail("No se puede deshabilitar la cuenta de administrador.", 400)
+
+    try:
+        updated = fb_auth.update_user(uid, **kwargs)
+        logger.info(
+            "/admin/users PATCH: admin=%s uid=%s fields=%s",
+            decoded_admin.get("email"), uid, list(kwargs.keys()),
+        )
+        return ok({"user": _serialize_fb_user(updated)})
+    except fb_auth.EmailAlreadyExistsError:
+        return fail("Ya existe una cuenta con ese correo.", 409)
+    except Exception as e:
+        logger.error("/admin/users PATCH: uid=%s error=%s", uid, e, exc_info=True)
+        return fail("Error al actualizar el usuario.", 500, details=str(e))
+
+
+@limiter.limit("10/minute")
+@app.route("/admin/users/<uid>", methods=["DELETE"])
+def admin_delete_user(uid: str):
+    """Deletes a Firebase Auth user (admin only). Refuses to delete admin accounts."""
+    decoded_admin = require_admin_or_403()
+
+    try:
+        target = fb_auth.get_user(uid)
+    except fb_auth.UserNotFoundError:
+        return fail("Usuario no encontrado.", 404)
+
+    if (target.email or "").lower() in _ADMIN_EMAILS:
+        return fail("No se puede eliminar la cuenta de administrador.", 400)
+
+    try:
+        fb_auth.delete_user(uid)
+        logger.info(
+            "/admin/users DELETE: admin=%s uid=%s email=%s",
+            decoded_admin.get("email"), uid, target.email,
+        )
+        return ok({"uid": uid, "deleted": True})
+    except Exception as e:
+        logger.error("/admin/users DELETE: uid=%s error=%s", uid, e, exc_info=True)
+        return fail("Error al eliminar el usuario.", 500, details=str(e))
 
 
 @limiter.limit("10/minute")
