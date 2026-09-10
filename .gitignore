@@ -8,3 +8,7 @@ __pycache__/
 *.py[cod]
 .firebase/
 node_modules/
+
+# resultados del benchmark (output, se regeneran)
+benchmarks/baseline.jsonl
+benchmarks/run_*.jsonl
