@@ -347,6 +347,9 @@ _HEADING_PATTERNS = [
     (2, re.compile(r"^\s*(M[ÓO]DULO)\s+(\d+)\b.*", re.I)),
     (3, re.compile(rf"^\s*(SECCI[ÓO]N)\s+({_ROMAN}|\d+)\b.*", re.I)),
     (4, re.compile(r"^\s*(Art[íi]culo|Art\.)\s+(\d+)\s*(bis|ter|qu[áa]ter)?\b.*", re.I)),
+    # unidades de cita de estándares: GRI "Contenido 306-2" / "Disclosure 306-2"; ESRS "E1-6", "S2-4", "G1-1"
+    (4, re.compile(r"^\s*(Contenido|Disclosure)\s+(\d{3}-\d{1,2})\b.*", re.I)),
+    (4, re.compile(r"^\s*([EGS]\d?-\d{1,2})\s*[–\-—:]?\s+[^\n]{3,100}$")),
 ]
 _NUMBERED_HEADING = re.compile(rf"^\s*(\d+(?:\.\d+){{0,3}})\.?\s+([{_UP}][^\n]{{2,88}})$")
 _ALLCAPS_HEADING = re.compile(rf"^\s*([{_UP}][{_UP}\s\d.,:;()\-/]{{4,78}})$")

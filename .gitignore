@@ -12,3 +12,6 @@ node_modules/
 # resultados del benchmark (output, se regeneran)
 benchmarks/baseline.jsonl
 benchmarks/run_*.jsonl
+
+# resultados de experimentos (se regeneran)
+results/

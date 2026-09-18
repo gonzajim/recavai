@@ -87,6 +87,40 @@ python -m src.rag_benchmark --golden benchmarks/golden_set.jsonl --mode api \
 (El ID token se saca de DevTools tras iniciar sesión en el sitio, o con el
 flujo de `mint_token` que usa el equipo.)
 
+## Experimento factorial de construcción de la KB (Línea 1) — `src/kb_experiment.py`
+
+Compara **estrategia de chunking × modelo de embeddings × distancia léxica de la consulta
+× grafo normativo** sobre el mismo corpus y golden set, en memoria (no toca Pinecone), y
+añade la métrica **`citation@article`** (¿el artículo que citaría el sistema es el gold?).
+Diseño, hipótesis y reglas de decisión: `paper/linea1_kb_construction_es_regulatory_rag.md`.
+
+El golden set necesita dos campos extra por ítem: `parafrasis` (condición *paraphrased*) y
+`fuentes_esperadas[].articulo` ("Artículo 8", "art. 10 bis", "Anexo I", "306-2", "E1-6").
+Los produce el taller con IDPEI (tareas T1 y T9).
+
+```bash
+# Smoke test del instrumento (corpus sintético de 2 docs, ~1 min). NO son resultados.
+python -m src.kb_experiment --corpus benchmarks/smoke/corpus --golden benchmarks/smoke/golden_smoke.jsonl \
+    --embedding-models sentence-transformers/all-MiniLM-L6-v2 sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2 \
+    --chunking fixed semantic_free semantic_struct semantic_struct_ctx small_to_big \
+    --graph none skeleton --k 4 --out results/smoke
+
+# Experimento real (cuando exista golden_set_v1 con articulo + parafrasis):
+python -m src.kb_experiment --corpus ./corpus --golden benchmarks/golden_set_v1/t1_recuperacion.jsonl \
+    --embedding-models sentence-transformers/all-MiniLM-L6-v2 \
+                       sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2 \
+                       sentence-transformers/paraphrase-multilingual-mpnet-base-v2 \
+    --chunking fixed semantic_free semantic_struct semantic_struct_ctx small_to_big \
+    --graph none skeleton --k 6 --cache results/cache --out results/v1
+# Brazos con LLM (propositions, grafo emergente): añadir --llm --chunking ... propositions --graph none skeleton emergent
+# Canal léxico BM25 fusionado por RRF como comprobación de robustez: --hybrid
+```
+
+Salida: `results/v1.rows.csv` (una fila por ítem × condición), `results/v1.build.csv` (coste
+de construcción: unidades, chars, unidades que cruzan artículo, segundos, llamadas LLM) y
+`results/v1.report.md` (tablas pivot + contrastes pre-registrados H1.1–H1.4 con IC bootstrap
+pareado, Wilcoxon y Holm, e interacción de H1.2).
+
 ## Interpretación rápida
 
 - `hit@k` bajo (<0.7) → el corpus no contiene bien la evidencia o el chunking la
