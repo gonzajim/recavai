@@ -83,6 +83,7 @@
 | `CMP-GEM` | `src/gemini_service.py` | Chat turns, tool-call loop, augmented-message construction | production |
 | `CMP-RAG` | `src/rag_service.py` | Embedding, Pinecone search, category filter, question routing, Neo4j, user-PDF chunking | production |
 | `CMP-PROMPT` | `src/assistant_instructions.py` | System prompts for auditor and advisor | production |
+| `CMP-CAT` | `src/audit_catalog.py` | Single source of truth for audit blocks and questions; coverage and close-gate logic | production |
 | `CMP-HIST` | `src/history_service.py` | Firestore history ↔ Gemini format, role sanitisation | production |
 | `CMP-PERS` | `src/persistence_service.py`, `src/bigquery_service.py` | BigQuery turn logging and history queries | production |
 | `CMP-ORCH` | `src/context_orchestrator.py` | Concurrent Pinecone+FAISS fan-out | partial |
@@ -181,13 +182,19 @@
 ```
 threads/{thread_id}                      { uid, created_at }
 threads/{thread_id}/messages/{auto_id}   { role: "user"|"model", text: string, created_at: timestamp }
-audit_progress/{thread_id}               { uid, blocks: { <block_id>: { status, summary, completed_at, updated_at } }, updated_at }
+audit_progress/{thread_id}               { uid, updated_at,
+                                           blocks: { <block_id>: {
+                                             status, summary, answered: [question_id],
+                                             notes, deferred_reason,
+                                             completed_at, updated_at } } }
 user_documents/{uid}/files/{doc_id}      { doc_id, filename, chunk_count, size_bytes, uploaded_at }
 ```
 
 **DATA-FS-1** `role` MUST be exactly `"user"` or `"model"`. No other value is read back.
 
-**DATA-FS-2** `status` MUST be one of `pending`, `in_progress`, `completed`.
+**DATA-FS-2** `status` MUST be one of `pending`, `in_progress`, `completed`, `deferred`.
+
+**DATA-FS-4** `answered` holds question ids from `src/audit_catalog.py` (`block_N_qM`). It is append-only within a block and is the sole basis for the close gate (`AGT-AUD-4`). Ids not present in the block's catalogue MUST be rejected and reported, never stored.
 
 **DATA-FS-3** The user and model messages of one turn MUST be written in one batch, with the model message timestamped 1 µs after the user message, to guarantee ordering.
 
@@ -291,31 +298,37 @@ max_rounds            = 6      # tool-call loop cap
 
 | Tool | Parameters | Effect |
 |---|---|---|
-| `invoke_sustainability_expert` | `query: string` (required) | Runs `chat_with_expert` with empty history; returns its text |
-| `complete_audit_block` | `block_id: string`, `summary: string` (both required) | Sets `blocks.<block_id>.status = "completed"` with summary in Firestore |
+| `record_block_answers` | `block_id`, `question_ids[]` (required), `notes` | Unions valid ids into `blocks.<id>.answered`, sets status `in_progress`, returns coverage + remaining questions |
+| `complete_audit_block` | `block_id`, `summary` (required) | Closes the block **only if** no mandatory question is missing; otherwise rejects and returns the missing list |
+| `defer_block` | `block_id`, `reason` (required) | Sets status `deferred`, preserving `answered`; advances to the next block |
+| `resume_block` | `block_id` (required) | Sets a deferred/pending block to `in_progress` and returns its remaining questions |
+| `invoke_sustainability_expert` | `query` (required) | Runs `chat_with_expert` with empty history; returns its text |
 
-**AGT-AUD-3** The tool loop MUST terminate after at most 6 rounds.
+**AGT-AUD-3** The tool loop MUST terminate after at most 8 rounds (a normal turn chains `record_block_answers` → `complete_audit_block`, plus room for one rejected-close retry).
 
-**AGT-AUD-4** A block MUST NOT be completed until every `[M]` question in it has an explicit answer. Blocks carry 4–9 `[M]` questions.
+**AGT-AUD-4** **Close gate (server-enforced).** `complete_audit_block` MUST verify coverage against `audit_catalog.missing_mandatory(block_id, answered)` and MUST refuse to close while any mandatory question is unrecorded. The refusal MUST name the missing questions verbatim. This check MUST live in the server, never be delegated to the prompt.
 
-**AGT-AUD-5** A single-word answer does not satisfy an `[M]` question requiring detail, except where the real answer is "we don't have that" / "not applicable".
+**AGT-AUD-5** The auditor MUST ask every `[M]` question of the active block. A question that does not apply to the company profile MUST still be asked and recorded with its "not applicable" answer, never silently skipped. A single-word answer does not satisfy an `[M]` question requiring detail, except where the real answer is "we don't have that" / "not applicable".
 
 **AGT-AUD-6** A tool failure MUST return a human-readable fallback string to the model, never raise.
 
-**AGT-AUD-7** Block catalogue (`AUDIT_BLOCKS` in `app.py`) is authoritative and MUST stay in sync with `AUDITOR_SYSTEM_PROMPT`:
+**AGT-AUD-7** `src/audit_catalog.py` is the **single source of truth** for blocks and questions. `app.py` (`AUDIT_BLOCKS`), the rendered prompt (`{block_catalog}`) and the close gate all derive from it. Questions MUST NOT be added in the prompt text. Question ids are stable and MUST NOT be renumbered or reused.
 
-```
-block_1 Contexto y Alcance      block_5 Impacto Ambiental
-block_2 Información Corporativa block_6 Personas y Derechos Humanos
-block_3 Cadena de Valor         block_7 Riesgos y Controles
-block_4 Gobernanza y Compliance block_8 Conclusiones y Roadmap
-```
+**AGT-AUD-8** Deferral is **user-initiated only**. The model MUST NOT defer a block on its own initiative. A deferred block keeps its recorded answers and remains resumable.
+
+**AGT-AUD-9** Active-block selection order: the `in_progress` block; else the first `pending`; else the first `deferred`; else the last block. Deferred blocks are skipped while pending blocks remain, and revisited once none do.
+
+**AGT-AUD-10** The injected `{audit_context}` MUST list, for the active block, the answered questions and the remaining mandatory questions **verbatim with their ids**. This list is the model's script.
+
+**AGT-AUD-11** The manual `POST /audit_progress/<thread_id>` endpoint is a deliberate **human override** and is not subject to `AGT-AUD-4`. The UI MUST display coverage so the override is informed.
 
 ### 8.3 History
 
 **AGT-HIST-1** History passed to Gemini MUST start with a `user` turn, alternate strictly, and MUST NOT end with a `user` turn.
 
-**AGT-HIST-2** History load is capped at 20 messages.
+**AGT-HIST-2** History load MUST return the **most recent** `limit` messages in chronological order (query descending, then reverse). A plain ascending `order_by(...).limit(n)` returns the *oldest* n and is a defect: it made the auditor re-read the start of the conversation forever, repeating answered questions and never accumulating enough coverage to close a block.
+
+**AGT-HIST-3** Default limit is 40 messages; `/chat_auditor` MUST request 80, since one block of six mandatory questions consumes 12–16 messages.
 
 ---
 
@@ -428,7 +441,9 @@ block_4 Gobernanza y Compliance block_8 Conclusiones y Roadmap
 | `INV-4` | The stored `text` of a chunk is verbatim source text; enrichment never mutates it. |
 | `INV-5` | Citation numbering in `sources[]` matches the `[n]` markers in the prompt context. |
 | `INV-6` | Degradation over failure: Pinecone/Neo4j/BigQuery/FAISS errors never turn into request failures. |
-| `INV-7` | The auditor cannot mark a block complete with unanswered `[M]` questions. |
+| `INV-7` | The auditor cannot mark a block complete with unanswered `[M]` questions. Enforced server-side in `complete_audit_block`, not by the prompt. |
+| `INV-10` | The model never sees a stale conversation window: history is always the most recent messages, never the oldest. |
+| `INV-11` | A block is only ever left incomplete by explicit user request (`defer_block`), and what was recorded survives for when it is resumed. |
 | `INV-8` | Gemini history alternates and never ends on a `user` turn. |
 | `INV-9` | `.env`, `results/`, `benchmarks/baseline.jsonl`, `benchmarks/run_*.jsonl` are never committed. |
 | `INV-OPS-1` | No agent deploys, pushes to a remote, writes to the production Pinecone namespace, or runs `--wipe` without explicit human instruction in the current session. |

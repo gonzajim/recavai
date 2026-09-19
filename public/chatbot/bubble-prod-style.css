@@ -841,8 +841,9 @@ sup.citation-inline:hover { opacity: .75; }
   margin-bottom: .4rem; overflow: hidden; background: #fff;
   transition: border-color .15s;
 }
-.audit-blk--active { border-color: rgba(140,27,58,.4); }
-.audit-blk--done   { border-color: rgba(46,204,113,.35); }
+.audit-blk--active   { border-color: rgba(140,27,58,.4); }
+.audit-blk--done     { border-color: rgba(46,204,113,.35); }
+.audit-blk--deferred { border-color: rgba(230,162,60,.45); }
 
 .audit-blk__hdr {
   display: flex; align-items: center; gap: .4rem;
@@ -857,8 +858,26 @@ sup.citation-inline:hover { opacity: .75; }
   font-size: .7rem; font-weight: 700;
   display: flex; align-items: center; justify-content: center; flex-shrink: 0;
 }
-.audit-blk--active .audit-blk__num { background: var(--uclm-rojo-principal); color: #fff; }
-.audit-blk--done   .audit-blk__num { background: #2ecc71; color: #fff; }
+.audit-blk--active   .audit-blk__num { background: var(--uclm-rojo-principal); color: #fff; }
+.audit-blk--done     .audit-blk__num { background: #2ecc71; color: #fff; }
+.audit-blk--deferred .audit-blk__num { background: #e6a23c; color: #fff; }
+
+/* Contador de obligatorias respondidas (3/6) */
+.audit-blk__count {
+  flex: 0 0 auto;
+  font-size: .72rem;
+  font-variant-numeric: tabular-nums;
+  color: var(--texto-gris-sutil);
+  background: rgba(0,0,0,.05);
+  border-radius: 10px;
+  padding: .1rem .4rem;
+}
+.audit-blk--deferred .audit-blk__count { background: rgba(230,162,60,.15); color: #9a6a12; }
+
+/* Lista de preguntas obligatorias que faltan en el bloque */
+.audit-blk__pending-ttl { display: block; font-weight: 600; margin-bottom: .25rem; }
+.audit-blk__pending ul { margin: 0; padding-left: 1.05rem; }
+.audit-blk__pending li { margin: .15rem 0; line-height: 1.35; }
 
 .audit-blk__label {
   font-size: .77rem; font-weight: 600;

@@ -18,6 +18,7 @@ from src.bigquery_service import (
     fetch_recent_conversations_for_user,
     fetch_conversation_thread,
 )
+from src import audit_catalog
 
 # --- Firebase Admin / Firestore ---
 import firebase_admin
@@ -200,18 +201,12 @@ def _iso_utc(ts):
 # =============================================================================
 # 4) Bloques y progreso de auditoría
 # =============================================================================
-AUDIT_BLOCKS = [
-    {"id": "block_1", "label": "1. Contexto y Alcance"},
-    {"id": "block_2", "label": "2. Información Corporativa"},
-    {"id": "block_3", "label": "3. Cadena de Valor"},
-    {"id": "block_4", "label": "4. Gobernanza y Compliance"},
-    {"id": "block_5", "label": "5. Impacto Ambiental"},
-    {"id": "block_6", "label": "6. Personas y Derechos Humanos"},
-    {"id": "block_7", "label": "7. Riesgos y Controles"},
-    {"id": "block_8", "label": "8. Conclusiones y Roadmap"},
-]
-AUDIT_BLOCK_IDS = {b["id"] for b in AUDIT_BLOCKS}
-VALID_STATUSES = {"pending", "in_progress", "completed"}
+# Los bloques y sus preguntas viven en src/audit_catalog.py (fuente única de verdad,
+# compartida con el prompt del auditor y con la validación de cierre del servidor).
+AUDIT_BLOCKS = [{"id": b.id, "label": b.label} for b in audit_catalog.AUDIT_CATALOG]
+AUDIT_BLOCK_IDS = set(audit_catalog.BLOCK_IDS)
+# "deferred": el usuario pidió saltar el bloque; queda incompleto y se puede retomar.
+VALID_STATUSES = {"pending", "in_progress", "completed", "deferred"}
 
 
 def _default_audit_progress_state(uid=None):
@@ -223,36 +218,64 @@ def _get_audit_progress_doc(thread_id: str):
 
 
 def _build_audit_progress_payload(thread_id, uid, doc_data):
+    """
+    Estado de la auditoría, con cobertura de preguntas por bloque.
+
+    Elección del bloque activo, en este orden:
+      1. el que esté marcado `in_progress`;
+      2. el primer `pending` (los aplazados se saltan);
+      3. si ya no quedan pendientes, el primer `deferred` (hay que volver a él);
+      4. si no queda nada, el último bloque.
+    """
     data = doc_data or {}
     blocks_state = data.get("blocks") or {}
     blocks_payload = []
     completed = 0
     active_block_id = None
     first_pending = None
+    first_deferred = None
 
     for block in AUDIT_BLOCKS:
-        stored = blocks_state.get(block["id"], {}) or {}
+        bid = block["id"]
+        stored = blocks_state.get(bid, {}) or {}
         status = stored.get("status", "pending")
+        answered = [q for q in (stored.get("answered") or []) if isinstance(q, str)]
+        done_m, total_m = audit_catalog.coverage(bid, answered)
+
         if status == "completed":
             completed += 1
         if status == "in_progress" and active_block_id is None:
-            active_block_id = block["id"]
+            active_block_id = bid
         if status == "pending" and first_pending is None:
-            first_pending = block["id"]
+            first_pending = bid
+        if status == "deferred" and first_deferred is None:
+            first_deferred = bid
 
         blocks_payload.append(
             {
-                "id": block["id"],
+                "id": bid,
                 "label": block["label"],
                 "status": status,
                 "summary": stored.get("summary"),
+                "answered": answered,
+                "answered_count": done_m,
+                "mandatory_count": total_m,
+                "pending_questions": [
+                    {"id": q.id, "text": q.text}
+                    for q in audit_catalog.missing_mandatory(bid, answered)
+                ],
+                "deferred_reason": stored.get("deferred_reason"),
                 "completed_at": _iso_utc(stored.get("completed_at")),
                 "updated_at": _iso_utc(stored.get("updated_at")),
             }
         )
 
     if active_block_id is None:
-        active_block_id = first_pending or (AUDIT_BLOCKS[-1]["id"] if AUDIT_BLOCKS else None)
+        active_block_id = (
+            first_pending
+            or first_deferred
+            or (AUDIT_BLOCKS[-1]["id"] if AUDIT_BLOCKS else None)
+        )
 
     total = len(AUDIT_BLOCKS)
     percent = int(round((completed / total) * 100)) if total else 0
@@ -271,34 +294,78 @@ def _build_audit_progress_payload(thread_id, uid, doc_data):
 
 def _format_audit_context(progress: dict) -> str:
     """
-    Converts the audit progress payload into a human-readable string
-    injected into AUDITOR_SYSTEM_PROMPT at {audit_context}.
+    Convierte el progreso en el texto que se inyecta en AUDITOR_SYSTEM_PROMPT.
+
+    Lo importante es el bloque "PENDIENTES EN ESTE BLOQUE": es el guion literal del
+    modelo. Sin él, el auditor tenía que deducir de la conversación qué preguntas ya
+    había hecho, y por eso saltaba preguntas y no cerraba nunca.
     """
-    lines = []
+    blocks = progress.get("blocks", [])
     active = progress.get("active_block_id", "block_1")
     completed_count = progress.get("completed_count", 0)
-    total = progress.get("total_blocks", 8)
+    total = progress.get("total_blocks", len(AUDIT_BLOCKS))
+    by_id = {b["id"]: b for b in blocks}
+    ab = by_id.get(active)
 
-    # Find label for active block
-    active_label = active
-    for b in progress.get("blocks", []):
-        if b["id"] == active:
-            active_label = b["label"]
-            break
+    lines = [f"Progreso global: {completed_count} de {total} bloques cerrados."]
 
-    lines.append(f"Bloque activo: {active_label}")
-    lines.append(f"Progreso: {completed_count} de {total} bloques completados")
-
-    completed_blocks = [b for b in progress.get("blocks", []) if b["status"] == "completed"]
+    completed_blocks = [b for b in blocks if b["status"] == "completed"]
     if completed_blocks:
-        lines.append("Bloques completados:")
+        lines.append("")
+        lines.append("BLOQUES YA CERRADOS (no vuelvas a preguntar sobre ellos):")
         for b in completed_blocks:
-            summary = b.get("summary") or "(sin resumen)"
-            lines.append(f"  • {b['label']}: {summary}")
+            lines.append(f"  • {b['label']}: {b.get('summary') or '(sin resumen)'}")
 
-    pending = [b["label"] for b in progress.get("blocks", []) if b["status"] != "completed"]
-    if pending:
-        lines.append(f"Bloques pendientes: {', '.join(pending)}")
+    deferred = [b for b in blocks if b["status"] == "deferred"]
+    if deferred:
+        lines.append("")
+        lines.append("BLOQUES APLAZADOS (incompletos; retómalos con resume_block cuando proceda):")
+        for b in deferred:
+            reason = b.get("deferred_reason") or "sin motivo registrado"
+            lines.append(
+                f"  • {b['label']} [{b['id']}] — {b['answered_count']}/{b['mandatory_count']} "
+                f"obligatorias respondidas. Motivo: {reason}"
+            )
+
+    if not ab:
+        lines.append("")
+        lines.append("No hay bloque activo: la auditoría está completa.")
+        return "\n".join(lines)
+
+    lines.append("")
+    lines.append("══ BLOQUE ACTIVO ══")
+    lines.append(f"{ab['label']}  [{ab['id']}]")
+    lines.append(
+        f"Cobertura: {ab['answered_count']} de {ab['mandatory_count']} preguntas obligatorias registradas."
+    )
+
+    answered_ids = set(ab.get("answered") or [])
+    block_def = audit_catalog.get_block(ab["id"])
+    if block_def and answered_ids:
+        done = [q for q in block_def.questions if q.id in answered_ids]
+        if done:
+            lines.append("")
+            lines.append("YA RESPONDIDAS (NO las repitas):")
+            for q in done:
+                lines.append(f"  ✓ ({q.id}) {q.text}")
+
+    pending_q = ab.get("pending_questions") or []
+    if pending_q:
+        lines.append("")
+        lines.append("PENDIENTES EN ESTE BLOQUE — este es tu guion, en este orden:")
+        for q in pending_q:
+            lines.append(f"  ▸ ({q['id']}) {q['text']}")
+        lines.append("")
+        lines.append(
+            f"Faltan {len(pending_q)}. Formula las siguientes 1-3 de esta lista, registra con "
+            "record_block_answers lo que el usuario responda, y no cierres el bloque hasta vaciarla."
+        )
+    else:
+        lines.append("")
+        lines.append(
+            "PENDIENTES: ninguna. Todas las obligatorias están registradas: cierra el bloque "
+            "ahora con complete_audit_block y pasa al siguiente."
+        )
 
     return "\n".join(lines)
 
@@ -361,7 +428,9 @@ def chat_with_main_audit_orchestrator():
             thread_id, uid, progress_doc.to_dict() if progress_doc.exists else {}
         )
         audit_context = _format_audit_context(progress)
-        history = get_thread_history(firestore_db, thread_id)
+        # La auditoría necesita más memoria que el asesor: un bloque con 6 obligatorias
+        # consume del orden de 12-16 mensajes, y hay 8 bloques.
+        history = get_thread_history(firestore_db, thread_id, limit=80)
 
         response_text = chat_with_auditor(
             genai_client,

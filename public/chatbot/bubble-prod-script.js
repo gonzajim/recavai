@@ -931,6 +931,10 @@ document.addEventListener('DOMContentLoaded', function () {
       label: block.label,
       status: 'pending',
       summary: null,
+      answered_count: 0,
+      mandatory_count: 0,
+      pending_questions: [],
+      deferred_reason: null,
       completed_at: null,
       updated_at: null,
     }));
@@ -953,12 +957,17 @@ document.addEventListener('DOMContentLoaded', function () {
     const incomingBlocks = new Map(state.blocks.map(block => [block.id, block]));
     const normalizedBlocks = AUDIT_BLOCKS_DEFINITION.map((definition) => {
       const info = incomingBlocks.get(definition.id) || {};
-      const st = (info.status === 'completed' || info.status === 'in_progress') ? info.status : 'pending';
+      const KNOWN = ['completed', 'in_progress', 'deferred'];
+      const st = KNOWN.includes(info.status) ? info.status : 'pending';
       return {
         id: definition.id,
         label: info.label || definition.label,
         status: st,
         summary: info.summary || null,
+        answered_count: Number.isFinite(info.answered_count) ? info.answered_count : 0,
+        mandatory_count: Number.isFinite(info.mandatory_count) ? info.mandatory_count : 0,
+        pending_questions: Array.isArray(info.pending_questions) ? info.pending_questions : [],
+        deferred_reason: info.deferred_reason || null,
         completed_at: info.completed_at || null,
         updated_at: info.updated_at || null,
       };
@@ -1128,23 +1137,41 @@ document.addEventListener('DOMContentLoaded', function () {
     blocks.forEach((block, idx) => {
       const isActive = block.id === activeBlockId;
       const isDone = block.status === 'completed';
+      const isDeferred = block.status === 'deferred';
+      const total = block.mandatory_count || 0;
+      const done = block.answered_count || 0;
 
       const li = document.createElement('li');
-      const modClass = isDone ? 'audit-blk--done' : (isActive ? 'audit-blk--active' : '');
+      const modClass = isDone ? 'audit-blk--done'
+        : (isDeferred ? 'audit-blk--deferred' : (isActive ? 'audit-blk--active' : ''));
       li.className = `audit-blk${modClass ? ' ' + modClass : ''}`;
       li.dataset.blockId = block.id;
 
-      const numContent = isDone ? '✓' : String(idx + 1);
+      const numContent = isDone ? '✓' : (isDeferred ? '⏸' : String(idx + 1));
       const canComplete = canCompleteAuditBlock(block, state);
       const completeBtnHtml = canComplete
         ? `<button class="audit-blk__complete-btn" type="button" data-action="complete-block" data-block-id="${block.id}">Completar</button>`
+        : '';
+      // Contador de preguntas obligatorias: es lo que deja ver de un vistazo si el
+      // bloque está realmente cubierto o solo parcialmente contestado.
+      const countHtml = (!isDone && total)
+        ? `<span class="audit-blk__count" title="Preguntas obligatorias respondidas">${done}/${total}</span>`
         : '';
 
       let bodyContent;
       if (isDone && block.summary && block.summary.trim()) {
         bodyContent = escapeHtml(block.summary.trim());
-      } else if (isActive) {
-        bodyContent = '<span class="audit-blk__body-empty">En curso…</span>';
+      } else if (isDeferred) {
+        const reason = block.deferred_reason ? ` — ${escapeHtml(block.deferred_reason)}` : '';
+        bodyContent = `<span class="audit-blk__body-empty">Aplazado${reason}</span>`;
+      } else if (isActive || done > 0) {
+        const pend = Array.isArray(block.pending_questions) ? block.pending_questions : [];
+        bodyContent = pend.length
+          ? `<div class="audit-blk__pending"><span class="audit-blk__pending-ttl">Pendientes (${pend.length}):</span><ul>`
+            + pend.slice(0, 8).map(q => `<li>${escapeHtml(q.text || q.id || '')}</li>`).join('')
+            + (pend.length > 8 ? `<li>…y ${pend.length - 8} más</li>` : '')
+            + '</ul></div>'
+          : '<span class="audit-blk__body-empty">Todas las obligatorias respondidas: listo para cerrar.</span>';
       } else {
         bodyContent = '<span class="audit-blk__body-empty">Pendiente</span>';
       }
@@ -1153,6 +1180,7 @@ document.addEventListener('DOMContentLoaded', function () {
         <div class="audit-blk__hdr">
           <span class="audit-blk__num">${numContent}</span>
           <span class="audit-blk__label">${escapeHtml(block.label || block.id)}</span>
+          ${countHtml}
           ${completeBtnHtml}
           <span class="audit-blk__chevron">▶</span>
         </div>
@@ -1194,6 +1222,7 @@ document.addEventListener('DOMContentLoaded', function () {
 
   function formatAuditBlockStatus(status, isActive) {
     if (status === 'completed') return 'Completado';
+    if (status === 'deferred') return 'Aplazado';
     if (status === 'in_progress' || isActive) return 'En progreso';
     return 'Pendiente';
   }

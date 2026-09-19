@@ -4,6 +4,7 @@ from google.cloud.firestore_v1 import SERVER_TIMESTAMP
 
 from src.config import logger
 from src.assistant_instructions import AUDITOR_SYSTEM_PROMPT, EXPERT_SYSTEM_PROMPT
+from src import audit_catalog
 from src.rag_service import (
     generate_embedding,
     search_documents,
@@ -50,23 +51,52 @@ AUDITOR_TOOLS = types.Tool(
             ),
         ),
         types.FunctionDeclaration(
-            name="complete_audit_block",
+            name="record_block_answers",
             description=(
-                "Marca el bloque de auditoría activo como completado y guarda el resumen de hallazgos. "
-                "REQUISITO ESTRICTO: llama a esta función ÚNICAMENTE cuando hayas obtenido respuesta "
-                "explícita a TODAS las preguntas marcadas [M] del bloque activo. "
-                "Si queda alguna pregunta [M] sin responder, formula esa pregunta primero — NO llames a esta función. "
-                "Una respuesta monosílaba ('sí', 'no', 'ya') no cubre una pregunta [M] que requiera detalle "
-                "(excepción: cuando la respuesta real es 'no tenemos eso' o 'no aplica'). "
-                "Cada bloque tiene entre 4 y 9 preguntas [M]; si llevas menos de 4 intercambios "
-                "en el bloque activo es casi seguro que aún no está cubierto."
+                "Registra qué preguntas del bloque activo han quedado respondidas. "
+                "LLÁMALA EN CADA TURNO en que el usuario responda algo, antes de formular las "
+                "siguientes preguntas. Si no registras, el sistema no sabe que has avanzado y "
+                "no te dejará cerrar el bloque. "
+                "Registra también las preguntas que el usuario haya respondido de pasada al "
+                "contestar a otra, y aquellas cuya respuesta real sea 'no aplica' o 'no tenemos eso'."
             ),
             parameters=types.Schema(
                 type=types.Type.OBJECT,
                 properties={
                     "block_id": types.Schema(
                         type=types.Type.STRING,
-                        description="ID del bloque a marcar como completado: block_1 a block_8.",
+                        description="ID del bloque activo: block_1 a block_8.",
+                    ),
+                    "question_ids": types.Schema(
+                        type=types.Type.ARRAY,
+                        items=types.Schema(type=types.Type.STRING),
+                        description=(
+                            "Identificadores de las preguntas respondidas, tal y como aparecen "
+                            "entre paréntesis en el catálogo. Ejemplo: [\"block_1_q1\", \"block_1_q3\"]."
+                        ),
+                    ),
+                    "notes": types.Schema(
+                        type=types.Type.STRING,
+                        description="1-2 frases con lo que el usuario ha contestado.",
+                    ),
+                },
+                required=["block_id", "question_ids"],
+            ),
+        ),
+        types.FunctionDeclaration(
+            name="complete_audit_block",
+            description=(
+                "Cierra el bloque activo y guarda el resumen de hallazgos. "
+                "El servidor COMPRUEBA la cobertura: si queda alguna pregunta obligatoria sin "
+                "registrar mediante record_block_answers, la llamada se rechaza y devuelve la lista "
+                "exacta de lo que falta. En ese caso formula esas preguntas en vez de reintentar."
+            ),
+            parameters=types.Schema(
+                type=types.Type.OBJECT,
+                properties={
+                    "block_id": types.Schema(
+                        type=types.Type.STRING,
+                        description="ID del bloque a cerrar: block_1 a block_8.",
                     ),
                     "summary": types.Schema(
                         type=types.Type.STRING,
@@ -78,6 +108,47 @@ AUDITOR_TOOLS = types.Tool(
                     ),
                 },
                 required=["block_id", "summary"],
+            ),
+        ),
+        types.FunctionDeclaration(
+            name="defer_block",
+            description=(
+                "Aplaza el bloque activo dejándolo INCOMPLETO y pasa al siguiente. "
+                "Úsala SOLO cuando el usuario pida saltar el bloque, dejarlo para más tarde o diga "
+                "que ahora no dispone de esos datos. Nunca por iniciativa propia. "
+                "Lo ya registrado se conserva para cuando se retome."
+            ),
+            parameters=types.Schema(
+                type=types.Type.OBJECT,
+                properties={
+                    "block_id": types.Schema(
+                        type=types.Type.STRING,
+                        description="ID del bloque a aplazar: block_1 a block_8.",
+                    ),
+                    "reason": types.Schema(
+                        type=types.Type.STRING,
+                        description="Motivo del aplazamiento, en palabras del usuario.",
+                    ),
+                },
+                required=["block_id", "reason"],
+            ),
+        ),
+        types.FunctionDeclaration(
+            name="resume_block",
+            description=(
+                "Retoma un bloque aplazado o pendiente y lo convierte en el bloque activo. "
+                "Úsala cuando el usuario quiera volver a él o cuando los demás bloques ya estén "
+                "cerrados. Devuelve las preguntas que siguen pendientes en ese bloque."
+            ),
+            parameters=types.Schema(
+                type=types.Type.OBJECT,
+                properties={
+                    "block_id": types.Schema(
+                        type=types.Type.STRING,
+                        description="ID del bloque a retomar: block_1 a block_8.",
+                    ),
+                },
+                required=["block_id"],
             ),
         ),
     ]
@@ -110,7 +181,11 @@ def chat_with_auditor(
     Handles: invoke_sustainability_expert and complete_audit_block.
     Returns the final text response.
     """
-    system = AUDITOR_SYSTEM_PROMPT.replace("{audit_context}", audit_context)
+    system = (
+        AUDITOR_SYSTEM_PROMPT
+        .replace("{audit_context}", audit_context)
+        .replace("{block_catalog}", audit_catalog.render_catalog())
+    )
 
     contents: list = list(history) + [
         types.Content(role="user", parts=[types.Part(text=user_message)])
@@ -122,7 +197,9 @@ def chat_with_auditor(
         tool_config=_AUDITOR_TOOL_CONFIG,
     )
 
-    max_rounds = 6  # safety cap on tool-call rounds
+    # Un turno normal encadena record_block_answers → complete_audit_block → (consulta al
+    # experto). 8 rondas dan margen para eso más un reintento tras un cierre rechazado.
+    max_rounds = 8
     for _ in range(max_rounds):
         response = genai_client.models.generate_content(
             model=_GEMINI_MODEL,
@@ -213,41 +290,210 @@ def _dispatch_tool(
             logger.error("invoke_sustainability_expert failed", exc_info=True)
             return "El experto no pudo procesar la consulta en este momento."
 
+    if name == "record_block_answers":
+        return _record_block_answers(
+            firestore_db, thread_id, args.get("block_id", ""),
+            args.get("question_ids") or [], args.get("notes", ""),
+        )
+
     if name == "complete_audit_block":
-        block_id = args.get("block_id", "")
-        summary = args.get("summary", "")
-        logger.info("Tool complete_audit_block: thread=%s block=%s", thread_id, block_id)
-        return _update_audit_progress(firestore_db, thread_id, block_id, summary)
+        return _complete_audit_block(
+            firestore_db, thread_id, args.get("block_id", ""), args.get("summary", ""),
+        )
+
+    if name == "defer_block":
+        return _defer_block(
+            firestore_db, thread_id, args.get("block_id", ""), args.get("reason", ""),
+        )
+
+    if name == "resume_block":
+        return _resume_block(firestore_db, thread_id, args.get("block_id", ""))
 
     logger.warning("Unknown tool called: %s", name)
     return f"Herramienta desconocida: {name}"
 
 
-def _update_audit_progress(
-    firestore_db, thread_id: str, block_id: str, summary: str
-) -> str:
+# ---------------------------------------------------------------------------
+# Estado de la auditoría — el servidor es quien decide, no el modelo
+# ---------------------------------------------------------------------------
+def _progress_doc(firestore_db, thread_id: str):
+    return firestore_db.collection("audit_progress").document(thread_id)
+
+
+def _block_state(firestore_db, thread_id: str, block_id: str) -> dict:
+    """Estado guardado de un bloque. Devuelve {} si no hay nada aún."""
     try:
-        doc_ref = firestore_db.collection("audit_progress").document(thread_id)
-        doc_ref.set(
-            {
-                "blocks": {
-                    block_id: {
-                        "status": "completed",
-                        "summary": summary,
-                        "completed_at": SERVER_TIMESTAMP,
-                        "updated_at": SERVER_TIMESTAMP,
-                    }
-                },
-                "updated_at": SERVER_TIMESTAMP,
-            },
+        snap = _progress_doc(firestore_db, thread_id).get()
+        data = snap.to_dict() if snap.exists else {}
+        return ((data or {}).get("blocks") or {}).get(block_id, {}) or {}
+    except Exception:
+        logger.error("No se pudo leer el progreso thread=%s", thread_id, exc_info=True)
+        return {}
+
+
+def _write_block(firestore_db, thread_id: str, block_id: str, patch: dict) -> bool:
+    try:
+        _progress_doc(firestore_db, thread_id).set(
+            {"blocks": {block_id: {**patch, "updated_at": SERVER_TIMESTAMP}},
+             "updated_at": SERVER_TIMESTAMP},
             merge=True,
         )
-        return f"Bloque {block_id} marcado como completado."
+        return True
     except Exception:
-        logger.error(
-            "Failed to update audit progress thread=%s block=%s", thread_id, block_id, exc_info=True
+        logger.error("No se pudo escribir el progreso thread=%s block=%s",
+                     thread_id, block_id, exc_info=True)
+        return False
+
+
+def _pending_text(block_id: str, answered: list[str]) -> str:
+    missing = audit_catalog.missing_mandatory(block_id, answered)
+    if not missing:
+        return "No queda ninguna pregunta obligatoria pendiente en este bloque."
+    lines = [f"Pendientes en {block_id} ({len(missing)}):"]
+    lines += [f"  ▸ ({q.id}) {q.text}" for q in missing]
+    return "\n".join(lines)
+
+
+def _record_block_answers(
+    firestore_db, thread_id: str, block_id: str, question_ids, notes: str
+) -> str:
+    if not audit_catalog.get_block(block_id):
+        return f"Bloque desconocido: {block_id}. Usa block_1..block_8."
+
+    valid = audit_catalog.valid_question_ids(block_id)
+    incoming = [q for q in question_ids if isinstance(q, str)]
+    accepted = sorted({q for q in incoming if q in valid})
+    rejected = sorted({q for q in incoming if q not in valid})
+
+    state = _block_state(firestore_db, thread_id, block_id)
+    answered = sorted(set(state.get("answered") or []) | set(accepted))
+
+    patch = {"answered": answered}
+    if state.get("status") not in ("completed",):
+        patch["status"] = "in_progress"
+    if notes:
+        patch["notes"] = ((state.get("notes") or "") + " " + notes).strip()[:2000]
+
+    if not _write_block(firestore_db, thread_id, block_id, patch):
+        return ("No se pudo guardar el avance. Continúa la entrevista y vuelve a registrarlo "
+                "en el siguiente turno.")
+
+    done, total = audit_catalog.coverage(block_id, answered)
+    out = [f"Registradas {len(accepted)} respuesta(s). Cobertura {block_id}: {done}/{total} obligatorias."]
+    if rejected:
+        out.append(f"Ids no reconocidos e ignorados: {', '.join(rejected)}. Usa los del catálogo.")
+    out.append(_pending_text(block_id, answered))
+    if done >= total:
+        out.append("Todas las obligatorias están cubiertas: cierra el bloque con complete_audit_block.")
+    logger.info("record_block_answers: thread=%s block=%s +%d -> %d/%d",
+                thread_id, block_id, len(accepted), done, total)
+    return "\n".join(out)
+
+
+def _complete_audit_block(firestore_db, thread_id: str, block_id: str, summary: str) -> str:
+    """Cierra un bloque SOLO si todas sus obligatorias están registradas.
+
+    Esta comprobación está aquí, en el servidor, y no confiada al prompt: antes el modelo
+    podía cerrar un bloque tras dos respuestas y la auditoría quedaba vacía."""
+    if not audit_catalog.get_block(block_id):
+        return f"Bloque desconocido: {block_id}. Usa block_1..block_8."
+
+    state = _block_state(firestore_db, thread_id, block_id)
+    answered = state.get("answered") or []
+    missing = audit_catalog.missing_mandatory(block_id, answered)
+
+    if missing:
+        done, total = audit_catalog.coverage(block_id, answered)
+        logger.info("complete_audit_block RECHAZADO: thread=%s block=%s %d/%d",
+                    thread_id, block_id, done, total)
+        return (
+            f"CIERRE RECHAZADO. El bloque {block_id} tiene {len(missing)} pregunta(s) obligatoria(s) "
+            f"sin registrar ({done}/{total} cubiertas).\n"
+            + _pending_text(block_id, answered)
+            + "\nFormula ahora esas preguntas. Si el usuario ya las respondió, regístralas primero "
+              "con record_block_answers. Si el usuario quiere saltarse el bloque, usa defer_block."
         )
-        return f"Bloque {block_id} procesado (no se pudo persistir el estado)."
+
+    if not _write_block(firestore_db, thread_id, block_id, {
+        "status": "completed", "summary": summary, "completed_at": SERVER_TIMESTAMP,
+    }):
+        return f"Bloque {block_id} cubierto, pero no se pudo persistir el cierre. Reinténtalo."
+
+    nxt = _next_block_id(firestore_db, thread_id, after=block_id)
+    logger.info("complete_audit_block OK: thread=%s block=%s next=%s", thread_id, block_id, nxt)
+    if nxt:
+        nb = audit_catalog.get_block(nxt)
+        return (f"Bloque {block_id} cerrado correctamente. Siguiente bloque activo: {nxt} — "
+                f"{nb.label if nb else nxt}. Anúncialo y empieza por sus primeras preguntas obligatorias.")
+    return (f"Bloque {block_id} cerrado. Era el último bloque pendiente: presenta ahora el "
+            "resumen ejecutivo de toda la auditoría.")
+
+
+def _defer_block(firestore_db, thread_id: str, block_id: str, reason: str) -> str:
+    if not audit_catalog.get_block(block_id):
+        return f"Bloque desconocido: {block_id}. Usa block_1..block_8."
+
+    state = _block_state(firestore_db, thread_id, block_id)
+    if state.get("status") == "completed":
+        return f"El bloque {block_id} ya está cerrado; no hace falta aplazarlo."
+
+    answered = state.get("answered") or []
+    if not _write_block(firestore_db, thread_id, block_id,
+                        {"status": "deferred", "deferred_reason": reason or "a petición del usuario"}):
+        return "No se pudo aplazar el bloque. Continúa con él."
+
+    done, total = audit_catalog.coverage(block_id, answered)
+    nxt = _next_block_id(firestore_db, thread_id, after=block_id)
+    logger.info("defer_block: thread=%s block=%s %d/%d next=%s", thread_id, block_id, done, total, nxt)
+    msg = (f"Bloque {block_id} aplazado con {done}/{total} obligatorias registradas. "
+           "Se conserva lo respondido y podrá retomarse con resume_block.")
+    if nxt:
+        nb = audit_catalog.get_block(nxt)
+        return msg + f" Siguiente bloque activo: {nxt} — {nb.label if nb else nxt}."
+    return msg + " No quedan más bloques por delante: confirma con el usuario si desea retomarlo ahora."
+
+
+def _resume_block(firestore_db, thread_id: str, block_id: str) -> str:
+    if not audit_catalog.get_block(block_id):
+        return f"Bloque desconocido: {block_id}. Usa block_1..block_8."
+
+    state = _block_state(firestore_db, thread_id, block_id)
+    if state.get("status") == "completed":
+        return f"El bloque {block_id} ya está cerrado. No procede retomarlo."
+
+    if not _write_block(firestore_db, thread_id, block_id, {"status": "in_progress"}):
+        return "No se pudo retomar el bloque."
+
+    answered = state.get("answered") or []
+    done, total = audit_catalog.coverage(block_id, answered)
+    b = audit_catalog.get_block(block_id)
+    logger.info("resume_block: thread=%s block=%s %d/%d", thread_id, block_id, done, total)
+    return (f"Bloque {block_id} — {b.label} retomado ({done}/{total} obligatorias ya registradas).\n"
+            + _pending_text(block_id, answered)
+            + "\nContinúa por esas preguntas; no repitas las ya registradas.")
+
+
+def _next_block_id(firestore_db, thread_id: str, after: str) -> str | None:
+    """Primer bloque posterior que no esté cerrado ni aplazado; si no hay, el primero
+    pendiente desde el principio; si tampoco, el primero aplazado."""
+    try:
+        snap = _progress_doc(firestore_db, thread_id).get()
+        blocks = ((snap.to_dict() if snap.exists else {}) or {}).get("blocks") or {}
+    except Exception:
+        blocks = {}
+
+    def status_of(bid: str) -> str:
+        return (blocks.get(bid) or {}).get("status", "pending")
+
+    order = list(audit_catalog.BLOCK_IDS)
+    start = order.index(after) + 1 if after in order else 0
+    for bid in order[start:] + order[:start]:
+        if status_of(bid) in ("pending", "in_progress"):
+            return bid
+    for bid in order:
+        if status_of(bid) == "deferred":
+            return bid
+    return None
 
 
 def _build_rag_message(
