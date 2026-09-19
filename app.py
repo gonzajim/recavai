@@ -858,8 +858,13 @@ def admin_delete_user(uid: str):
 @limiter.limit("10/minute")
 @app.route("/admin/ingest_document", methods=["POST"])
 def admin_ingest_document():
-    """Ingests a document into the Pinecone RAG index."""
-    decoded_user = require_firebase_user_or_403()
+    """Ingests a document into the global Pinecone corpus (admin only).
+
+    Escribe en la base documental que alimenta las respuestas de TODOS los usuarios,
+    así que exige rol de administrador. Hasta 2026-09-19 validaba solo usuario
+    verificado: cualquier cuenta podía inyectar contenido en el corpus.
+    """
+    decoded_user = require_admin_or_403()
 
     if request.content_type != "application/json":
         return fail("Content-Type must be application/json", 415)
