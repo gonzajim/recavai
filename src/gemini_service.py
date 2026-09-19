@@ -1,4 +1,7 @@
 # src/gemini_service.py
+import re
+from datetime import datetime, timezone
+
 from google.genai import types
 from google.cloud.firestore_v1 import SERVER_TIMESTAMP
 
@@ -53,12 +56,16 @@ AUDITOR_TOOLS = types.Tool(
         types.FunctionDeclaration(
             name="record_block_answers",
             description=(
-                "Registra qué preguntas del bloque activo han quedado respondidas. "
+                "Registra qué preguntas del bloque activo han quedado respondidas Y verifica "
+                "automáticamente si lo respondido se ajusta a la normativa. "
                 "LLÁMALA EN CADA TURNO en que el usuario responda algo, antes de formular las "
                 "siguientes preguntas. Si no registras, el sistema no sabe que has avanzado y "
                 "no te dejará cerrar el bloque. "
                 "Registra también las preguntas que el usuario haya respondido de pasada al "
-                "contestar a otra, y aquellas cuya respuesta real sea 'no aplica' o 'no tenemos eso'."
+                "contestar a otra, y aquellas cuya respuesta real sea 'no aplica' o 'no tenemos eso'. "
+                "Devuelve la cobertura, las preguntas que faltan y, cuando la respuesta sea "
+                "evaluable, un veredicto de cumplimiento con la brecha y la recomendación que "
+                "debes trasladar al usuario."
             ),
             parameters=types.Schema(
                 type=types.Type.OBJECT,
@@ -77,10 +84,15 @@ AUDITOR_TOOLS = types.Tool(
                     ),
                     "notes": types.Schema(
                         type=types.Type.STRING,
-                        description="1-2 frases con lo que el usuario ha contestado.",
+                        description=(
+                            "Lo que ha respondido el usuario, literal o resumido con fidelidad, "
+                            "con los datos concretos que haya dado (fechas, alcances, si es para "
+                            "externos, etc.). OBLIGATORIO: es el texto que se contrasta con la "
+                            "normativa, así que un resumen vago produce una verificación inútil."
+                        ),
                     ),
                 },
-                required=["block_id", "question_ids"],
+                required=["block_id", "question_ids", "notes"],
             ),
         ),
         types.FunctionDeclaration(
@@ -294,6 +306,8 @@ def _dispatch_tool(
         return _record_block_answers(
             firestore_db, thread_id, args.get("block_id", ""),
             args.get("question_ids") or [], args.get("notes", ""),
+            genai_client=genai_client, embed_model=embed_model,
+            pinecone_index=pinecone_index, uid=uid,
         )
 
     if name == "complete_audit_block":
@@ -331,13 +345,21 @@ def _block_state(firestore_db, thread_id: str, block_id: str) -> dict:
         return {}
 
 
-def _write_block(firestore_db, thread_id: str, block_id: str, patch: dict) -> bool:
+def _write_block(firestore_db, thread_id: str, block_id: str, patch: dict,
+                 active: str | None = None) -> bool:
+    """Escribe el estado de un bloque. `active` fija además el bloque activo del hilo.
+
+    El bloque activo se guarda explícitamente y no se deduce del estado: al deducirlo,
+    dos bloques podían quedar `in_progress` a la vez y el activo se resolvía por orden
+    de catálogo en vez de por dónde se está trabajando realmente."""
     try:
-        _progress_doc(firestore_db, thread_id).set(
-            {"blocks": {block_id: {**patch, "updated_at": SERVER_TIMESTAMP}},
-             "updated_at": SERVER_TIMESTAMP},
-            merge=True,
-        )
+        doc: dict = {
+            "blocks": {block_id: {**patch, "updated_at": SERVER_TIMESTAMP}},
+            "updated_at": SERVER_TIMESTAMP,
+        }
+        if active is not None:
+            doc["active_block_id"] = active
+        _progress_doc(firestore_db, thread_id).set(doc, merge=True)
         return True
     except Exception:
         logger.error("No se pudo escribir el progreso thread=%s block=%s",
@@ -354,8 +376,62 @@ def _pending_text(block_id: str, answered: list[str]) -> str:
     return "\n".join(lines)
 
 
+_VERDICT_RE = re.compile(r"VEREDICTO:\s*(cumple parcialmente|no evaluable|no cumple|cumple)", re.I)
+
+
+def _verify_compliance(
+    genai_client, embed_model, pinecone_index, thread_id: str, uid,
+    block_id: str, questions: list, answer_text: str,
+) -> dict | None:
+    """Contrasta la respuesta del usuario con el corpus normativo usando el asesor.
+
+    La consulta la construye el servidor a partir del texto de las preguntas del catálogo
+    y de lo que ha respondido el usuario, para que la verificación no dependa de cómo el
+    auditor decida redactarla. Devuelve None si no hay nada evaluable o si el asesor falla:
+    la verificación NUNCA puede tumbar el registro de la respuesta.
+    """
+    if not questions or not answer_text.strip():
+        return None
+
+    preguntas = "\n".join(f"- {q.text}" for q in questions)
+    query = (
+        "VERIFICACIÓN DE CUMPLIMIENTO NORMATIVO (consulta interna de un auditor, "
+        "no la responde un usuario final).\n\n"
+        f"Preguntas de auditoría formuladas:\n{preguntas}\n\n"
+        f"Respuesta de la empresa auditada:\n\"{answer_text.strip()}\"\n\n"
+        "Contrasta esa respuesta con la normativa aplicable (CSRD, CSDDD, ESRS/NEIS, GRI, "
+        "guías OCDE) según la base documental. Responde EXACTAMENTE con este formato:\n"
+        "VEREDICTO: cumple | cumple parcialmente | no cumple | no evaluable\n"
+        "BRECHA: (qué falta o qué incumple, 1-2 frases; 'ninguna' si cumple)\n"
+        "RECOMENDACIÓN: (qué debe hacer la empresa, concreto y accionable, 1-3 frases; "
+        "'ninguna' si cumple)\n"
+        "BASE: (norma y artículo o disclosure concreto en el que te apoyas)\n"
+        "Si la base documental no permite pronunciarse, usa VEREDICTO: no evaluable."
+    )
+
+    try:
+        text, _sources = chat_with_expert(
+            genai_client, embed_model, pinecone_index, [], query,
+            thread_id=thread_id, local_store=None, uid=uid,
+        )
+    except Exception:
+        logger.error("Verificación de cumplimiento fallida thread=%s block=%s",
+                     thread_id, block_id, exc_info=True)
+        return None
+
+    m = _VERDICT_RE.search(text or "")
+    verdict = m.group(1).lower() if m else "no evaluable"
+    return {
+        "question_ids": [q.id for q in questions],
+        "verdict": verdict,
+        "assessment": (text or "").strip()[:2000],
+        "at": datetime.now(timezone.utc).isoformat(),
+    }
+
+
 def _record_block_answers(
-    firestore_db, thread_id: str, block_id: str, question_ids, notes: str
+    firestore_db, thread_id: str, block_id: str, question_ids, notes: str,
+    genai_client=None, embed_model=None, pinecone_index=None, uid=None,
 ) -> str:
     if not audit_catalog.get_block(block_id):
         return f"Bloque desconocido: {block_id}. Usa block_1..block_8."
@@ -368,13 +444,24 @@ def _record_block_answers(
     state = _block_state(firestore_db, thread_id, block_id)
     answered = sorted(set(state.get("answered") or []) | set(accepted))
 
+    # --- Verificación normativa de lo que acaba de responder el usuario ---
+    finding = None
+    to_verify = audit_catalog.verifiable(block_id, accepted)
+    if to_verify and notes and genai_client is not None:
+        finding = _verify_compliance(
+            genai_client, embed_model, pinecone_index, thread_id, uid,
+            block_id, to_verify, notes,
+        )
+
     patch = {"answered": answered}
     if state.get("status") not in ("completed",):
         patch["status"] = "in_progress"
     if notes:
         patch["notes"] = ((state.get("notes") or "") + " " + notes).strip()[:2000]
+    if finding:
+        patch["findings"] = (state.get("findings") or []) + [finding]
 
-    if not _write_block(firestore_db, thread_id, block_id, patch):
+    if not _write_block(firestore_db, thread_id, block_id, patch, active=block_id):
         return ("No se pudo guardar el avance. Continúa la entrevista y vuelve a registrarlo "
                 "en el siguiente turno.")
 
@@ -382,11 +469,34 @@ def _record_block_answers(
     out = [f"Registradas {len(accepted)} respuesta(s). Cobertura {block_id}: {done}/{total} obligatorias."]
     if rejected:
         out.append(f"Ids no reconocidos e ignorados: {', '.join(rejected)}. Usa los del catálogo.")
+
+    if finding:
+        out.append("")
+        out.append("── VERIFICACIÓN NORMATIVA DE ESTA RESPUESTA ──")
+        out.append(finding["assessment"])
+        out.append("")
+        if finding["verdict"] == "cumple":
+            out.append("DEBES comunicar al usuario, en tu respuesta, que esta parte se ajusta a la "
+                       "normativa, citando brevemente la base.")
+        elif finding["verdict"] == "no evaluable":
+            out.append("No ha podido evaluarse con la base documental. No afirmes que cumple ni que "
+                       "incumple: pide el dato concreto que falte para poder valorarlo.")
+        else:
+            out.append(f"Veredicto: {finding['verdict'].upper()}. DEBES informar al usuario en tu "
+                       "respuesta: explícale la brecha y qué tiene que hacer para corregirla, con "
+                       "la base normativa. Clasifícala como Crítico / Alto / Medio. "
+                       "Hazlo ANTES de formular las siguientes preguntas.")
+    elif to_verify and not notes:
+        out.append("Sin texto en `notes` no se ha podido verificar el cumplimiento. "
+                   "Incluye siempre lo que ha respondido el usuario.")
+
+    out.append("")
     out.append(_pending_text(block_id, answered))
     if done >= total:
         out.append("Todas las obligatorias están cubiertas: cierra el bloque con complete_audit_block.")
-    logger.info("record_block_answers: thread=%s block=%s +%d -> %d/%d",
-                thread_id, block_id, len(accepted), done, total)
+    logger.info("record_block_answers: thread=%s block=%s +%d -> %d/%d verdict=%s",
+                thread_id, block_id, len(accepted), done, total,
+                finding["verdict"] if finding else "—")
     return "\n".join(out)
 
 
@@ -414,12 +524,12 @@ def _complete_audit_block(firestore_db, thread_id: str, block_id: str, summary: 
               "con record_block_answers. Si el usuario quiere saltarse el bloque, usa defer_block."
         )
 
+    nxt = _next_block_id(firestore_db, thread_id, after=block_id)
     if not _write_block(firestore_db, thread_id, block_id, {
         "status": "completed", "summary": summary, "completed_at": SERVER_TIMESTAMP,
-    }):
+    }, active=nxt):
         return f"Bloque {block_id} cubierto, pero no se pudo persistir el cierre. Reinténtalo."
 
-    nxt = _next_block_id(firestore_db, thread_id, after=block_id)
     logger.info("complete_audit_block OK: thread=%s block=%s next=%s", thread_id, block_id, nxt)
     if nxt:
         nb = audit_catalog.get_block(nxt)
@@ -438,12 +548,13 @@ def _defer_block(firestore_db, thread_id: str, block_id: str, reason: str) -> st
         return f"El bloque {block_id} ya está cerrado; no hace falta aplazarlo."
 
     answered = state.get("answered") or []
+    nxt = _next_block_id(firestore_db, thread_id, after=block_id)
     if not _write_block(firestore_db, thread_id, block_id,
-                        {"status": "deferred", "deferred_reason": reason or "a petición del usuario"}):
+                        {"status": "deferred", "deferred_reason": reason or "a petición del usuario"},
+                        active=nxt or block_id):
         return "No se pudo aplazar el bloque. Continúa con él."
 
     done, total = audit_catalog.coverage(block_id, answered)
-    nxt = _next_block_id(firestore_db, thread_id, after=block_id)
     logger.info("defer_block: thread=%s block=%s %d/%d next=%s", thread_id, block_id, done, total, nxt)
     msg = (f"Bloque {block_id} aplazado con {done}/{total} obligatorias registradas. "
            "Se conserva lo respondido y podrá retomarse con resume_block.")
@@ -461,7 +572,7 @@ def _resume_block(firestore_db, thread_id: str, block_id: str) -> str:
     if state.get("status") == "completed":
         return f"El bloque {block_id} ya está cerrado. No procede retomarlo."
 
-    if not _write_block(firestore_db, thread_id, block_id, {"status": "in_progress"}):
+    if not _write_block(firestore_db, thread_id, block_id, {"status": "in_progress"}, active=block_id):
         return "No se pudo retomar el bloque."
 
     answered = state.get("answered") or []

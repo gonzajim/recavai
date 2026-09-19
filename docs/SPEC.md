@@ -182,10 +182,12 @@
 ```
 threads/{thread_id}                      { uid, created_at }
 threads/{thread_id}/messages/{auto_id}   { role: "user"|"model", text: string, created_at: timestamp }
-audit_progress/{thread_id}               { uid, updated_at,
+audit_progress/{thread_id}               { uid, updated_at, active_block_id,
                                            blocks: { <block_id>: {
                                              status, summary, answered: [question_id],
                                              notes, deferred_reason,
+                                             findings: [{ question_ids, verdict,
+                                                          assessment, at }],
                                              completed_at, updated_at } } }
 user_documents/{uid}/files/{doc_id}      { doc_id, filename, chunk_count, size_bytes, uploaded_at }
 ```
@@ -193,6 +195,8 @@ user_documents/{uid}/files/{doc_id}      { doc_id, filename, chunk_count, size_b
 **DATA-FS-1** `role` MUST be exactly `"user"` or `"model"`. No other value is read back.
 
 **DATA-FS-2** `status` MUST be one of `pending`, `in_progress`, `completed`, `deferred`.
+
+**DATA-FS-5** `findings` holds one entry per compliance verification (`AGT-AUD-12`): the questions it covered, the parsed verdict, the advisor's full assessment (≤2000 chars) and a UTC timestamp. It is append-only and feeds the block summary and the final executive report.
 
 **DATA-FS-4** `answered` holds question ids from `src/audit_catalog.py` (`block_N_qM`). It is append-only within a block and is the sole basis for the close gate (`AGT-AUD-4`). Ids not present in the block's catalogue MUST be rejected and reported, never stored.
 
@@ -298,7 +302,7 @@ max_rounds            = 6      # tool-call loop cap
 
 | Tool | Parameters | Effect |
 |---|---|---|
-| `record_block_answers` | `block_id`, `question_ids[]` (required), `notes` | Unions valid ids into `blocks.<id>.answered`, sets status `in_progress`, returns coverage + remaining questions |
+| `record_block_answers` | `block_id`, `question_ids[]`, `notes` (all required) | Unions valid ids into `blocks.<id>.answered`, sets status `in_progress` and the active block, **runs the compliance check** (`AGT-AUD-12`), returns coverage + remaining questions + verdict |
 | `complete_audit_block` | `block_id`, `summary` (required) | Closes the block **only if** no mandatory question is missing; otherwise rejects and returns the missing list |
 | `defer_block` | `block_id`, `reason` (required) | Sets status `deferred`, preserving `answered`; advances to the next block |
 | `resume_block` | `block_id` (required) | Sets a deferred/pending block to `in_progress` and returns its remaining questions |
@@ -321,6 +325,18 @@ max_rounds            = 6      # tool-call loop cap
 **AGT-AUD-10** The injected `{audit_context}` MUST list, for the active block, the answered questions and the remaining mandatory questions **verbatim with their ids**. This list is the model's script.
 
 **AGT-AUD-11** The manual `POST /audit_progress/<thread_id>` endpoint is a deliberate **human override** and is not subject to `AGT-AUD-4`. The UI MUST display coverage so the override is informed.
+
+**AGT-AUD-12 (compliance verification).** `record_block_answers` MUST contrast the recorded answer against the corpus by calling the advisor, for every recorded question whose catalogue entry has `verify = True`. Requirements:
+
+- The verification query is **built by the server** from the catalogue question text plus the user's answer, never phrased by the model, so verification does not depend on how the auditor chooses to word it.
+- The advisor is asked for a fixed shape: `VEREDICTO` (`cumple` | `cumple parcialmente` | `no cumple` | `no evaluable`), `BRECHA`, `RECOMENDACIÓN`, `BASE`.
+- The parsed finding is appended to `blocks.<id>.findings` and returned to the model with an explicit instruction to relay gap and remediation to the user **before** asking further questions.
+- Verification MUST be skipped when no recorded question is verifiable (saves a call) and when `notes` is empty.
+- A verification failure MUST NOT fail the recording (`ARC-6`); the answer is still stored and the turn continues.
+
+**AGT-AUD-13** `Question.verify` is `False` for descriptive/profile questions (company name, headcount, turnover, budget, external support). Assessing those against a directive is meaningless. Block 1's normative applicability is assessed at block close, per its catalogue note, not question by question.
+
+**AGT-AUD-14** The active block is stored explicitly in `audit_progress/{thread_id}.active_block_id` and set by `record_block_answers`, `complete_audit_block`, `defer_block` and `resume_block`. It MUST NOT be inferred from block statuses alone: two blocks could hold `in_progress` simultaneously and the active one would then resolve by catalogue order instead of by where work is happening. Inference remains only as a fallback for threads predating the field.
 
 ### 8.3 History
 

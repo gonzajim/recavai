@@ -265,10 +265,29 @@ def _build_audit_progress_payload(thread_id, uid, doc_data):
                     for q in audit_catalog.missing_mandatory(bid, answered)
                 ],
                 "deferred_reason": stored.get("deferred_reason"),
+                "findings": [
+                    {
+                        "question_ids": f.get("question_ids") or [],
+                        "verdict": f.get("verdict"),
+                        "assessment": f.get("assessment"),
+                        "at": f.get("at"),
+                    }
+                    for f in (stored.get("findings") or [])
+                    if isinstance(f, dict)
+                ],
                 "completed_at": _iso_utc(stored.get("completed_at")),
                 "updated_at": _iso_utc(stored.get("updated_at")),
             }
         )
+
+    # El bloque activo guardado manda: lo fijan las herramientas del auditor al registrar,
+    # cerrar, aplazar o retomar. La deducción por estado queda como respaldo para hilos
+    # antiguos que no tienen el campo.
+    stored_active = data.get("active_block_id")
+    if stored_active in AUDIT_BLOCK_IDS:
+        st = (blocks_state.get(stored_active) or {}).get("status", "pending")
+        if st != "completed":
+            active_block_id = stored_active
 
     if active_block_id is None:
         active_block_id = (
@@ -348,6 +367,14 @@ def _format_audit_context(progress: dict) -> str:
             lines.append("YA RESPONDIDAS (NO las repitas):")
             for q in done:
                 lines.append(f"  ✓ ({q.id}) {q.text}")
+
+    gaps = [f for f in (ab.get("findings") or [])
+            if f.get("verdict") in ("no cumple", "cumple parcialmente")]
+    if gaps:
+        lines.append("")
+        lines.append("BRECHAS YA DETECTADAS EN ESTE BLOQUE (recógelas en el resumen al cerrarlo):")
+        for f in gaps[-6:]:
+            lines.append(f"  ! [{f.get('verdict')}] {', '.join(f.get('question_ids') or [])}")
 
     pending_q = ab.get("pending_questions") or []
     if pending_q:

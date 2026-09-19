@@ -22,6 +22,12 @@ class Question:
     id: str            # estable: b<N>_q<M>. Nunca se reutiliza ni se renumera.
     text: str
     mandatory: bool = True
+    # ¿La respuesta a esta pregunta es evaluable contra la normativa?
+    # False para las puramente descriptivas o de perfil ("¿cómo se llama la empresa?",
+    # "¿qué presupuesto tiene?"): verificarlas contra la CSDDD no significa nada y solo
+    # gastaría una llamada al experto. La aplicabilidad normativa del perfil se evalúa
+    # al cerrar el bloque 1, no pregunta a pregunta.
+    verify: bool = True
 
 
 @dataclass(frozen=True)
@@ -41,8 +47,9 @@ class Block:
         return tuple(q for q in self.questions if not q.mandatory)
 
 
-def _q(bid: str, n: int, text: str, mandatory: bool = True) -> Question:
-    return Question(id=f"{bid}_q{n}", text=" ".join(text.split()), mandatory=mandatory)
+def _q(bid: str, n: int, text: str, mandatory: bool = True, verify: bool = True) -> Question:
+    return Question(id=f"{bid}_q{n}", text=" ".join(text.split()),
+                    mandatory=mandatory, verify=verify)
 
 
 AUDIT_CATALOG: tuple[Block, ...] = (
@@ -51,12 +58,12 @@ AUDIT_CATALOG: tuple[Block, ...] = (
         label="1. Contexto y Alcance",
         objective="Identificar la empresa, su perfil y sus obligaciones normativas aplicables.",
         questions=(
-            _q("block_1", 1, "Nombre de la empresa y actividad principal (sector/CNAE)."),
-            _q("block_1", 2, "Países en los que opera (sede, filiales, mercados principales)."),
-            _q("block_1", 3, "Número total de empleados (en la empresa y, si procede, en el grupo)."),
-            _q("block_1", 4, "Facturación anual aproximada (intervalo orientativo es suficiente)."),
-            _q("block_1", 5, "Estructura jurídica: ¿es empresa independiente, filial de un grupo, o matriz?"),
-            _q("block_1", 6, "¿Tiene experiencia previa en auditorías o reporting de sostenibilidad?"),
+            _q("block_1", 1, "Nombre de la empresa y actividad principal (sector/CNAE).", verify=False),
+            _q("block_1", 2, "Países en los que opera (sede, filiales, mercados principales).", verify=False),
+            _q("block_1", 3, "Número total de empleados (en la empresa y, si procede, en el grupo).", verify=False),
+            _q("block_1", 4, "Facturación anual aproximada (intervalo orientativo es suficiente).", verify=False),
+            _q("block_1", 5, "Estructura jurídica: ¿es empresa independiente, filial de un grupo, o matriz?", verify=False),
+            _q("block_1", 6, "¿Tiene experiencia previa en auditorías o reporting de sostenibilidad?", verify=False),
             _q("block_1", 7, "¿Forma parte de la cadena de valor de una empresa obligada por CSRD o CSDDD?", False),
         ),
         note=("Antes de cerrar, informa al usuario de su situación normativa: ¿ámbito CSDDD directo "
@@ -86,7 +93,7 @@ AUDIT_CATALOG: tuple[Block, ...] = (
         questions=(
             _q("block_3", 1, "Descripción de la cadena de valor: ¿qué actividades realiza upstream (proveedores) "
                              "y downstream (distribución, clientes)?"),
-            _q("block_3", 2, "¿Cuántos proveedores directos tiene aproximadamente? ¿En qué países están?"),
+            _q("block_3", 2, "¿Cuántos proveedores directos tiene aproximadamente? ¿En qué países están?", verify=False),
             _q("block_3", 3, "¿Tiene proveedores en países o regiones con alto riesgo en derechos humanos "
                              "o medioambiente (zonas de gobernanza débil)?"),
             _q("block_3", 4, "¿Incluye cláusulas de derechos humanos y sostenibilidad en contratos con proveedores?"),
@@ -184,12 +191,12 @@ AUDIT_CATALOG: tuple[Block, ...] = (
         label="8. Conclusiones y Roadmap",
         objective="Sintetizar los hallazgos de la auditoría y definir un plan de acción.",
         questions=(
-            _q("block_8", 1, "De los gaps identificados durante la auditoría, ¿cuáles son más urgentes de abordar?"),
+            _q("block_8", 1, "De los gaps identificados durante la auditoría, ¿cuáles son más urgentes de abordar?", verify=False),
             _q("block_8", 2, "¿Tiene ya un plan de acción o roadmap de sostenibilidad aprobado? "
                              "Si es sí: ¿qué hitos y calendario contempla?"),
-            _q("block_8", 3, "¿Qué recursos humanos y presupuesto puede destinar a la implementación?"),
+            _q("block_8", 3, "¿Qué recursos humanos y presupuesto puede destinar a la implementación?", verify=False),
             _q("block_8", 4, "¿Qué tipo de apoyo externo necesita? (formación, consultoría, herramientas "
-                             "tecnológicas, asesoramiento jurídico)"),
+                             "tecnológicas, asesoramiento jurídico)", verify=False),
             _q("block_8", 5, "¿Cuáles considera sus principales fortalezas en sostenibilidad y DDHH?", False),
             _q("block_8", 6, "¿Cuál es el calendario estimado para cumplir con las obligaciones normativas?", False),
         ),
@@ -229,6 +236,16 @@ def missing_mandatory(block_id: str, answered: list[str] | set[str] | None) -> l
         return []
     done = set(answered or ())
     return [q for q in b.mandatory if q.id not in done]
+
+
+def verifiable(block_id: str, question_ids: list[str] | set[str] | None) -> list[Question]:
+    """De los ids dados, los que son evaluables contra normativa (`verify=True`).
+    Si la lista sale vacía no se llama al experto: no hay nada que verificar."""
+    b = get_block(block_id)
+    if not b:
+        return []
+    wanted = set(question_ids or ())
+    return [q for q in b.questions if q.id in wanted and q.verify]
 
 
 def coverage(block_id: str, answered: list[str] | set[str] | None) -> tuple[int, int]:
