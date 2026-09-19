@@ -87,11 +87,16 @@ EOF
 
   hosting)
     say "Compilando el panel de administración"
-    (cd public/admin-panel && npm ci && npm run build)
+    # npm ci exige lock sincronizado y hoy no lo está; se cae a npm install.
+    (cd public/admin-panel && { npm ci || { echo "AVISO: package-lock desincronizado; usando npm install"; npm install; }; } && npm run build)
     say "Publicando hosting en el proyecto $FIREBASE_ALIAS"
     echo "AVISO: el widget publicado es anterior a HEAD; esto sube también el fix de login"
     echo "       y la gestión de documentos, no solo los cambios del auditor."
-    npx --yes firebase-tools deploy --only hosting --project "$FIREBASE_ALIAS" --non-interactive
+    if command -v firebase >/dev/null 2>&1; then
+      firebase deploy --only hosting --project "$FIREBASE_ALIAS" --non-interactive
+    else
+      npx --yes firebase-tools deploy --only hosting --project "$FIREBASE_ALIAS" --non-interactive
+    fi
     ;;
 
   rollback)
