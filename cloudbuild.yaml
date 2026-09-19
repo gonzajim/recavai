@@ -54,6 +54,7 @@ steps:
       - '-c'
       - |
         set -euo pipefail
+        # $$ escapa el $ para que Cloud Build no lo tome por una sustitución suya.
         TRAFFIC_ARGS="--no-traffic --tag=${_CANARY_TAG}"
         if [ "${_TRAFFIC}" = "latest" ]; then TRAFFIC_ARGS=""; fi
         gcloud run deploy ${_SERVICE_NAME} \
@@ -63,13 +64,17 @@ steps:
           --update-secrets=GEMINI_API_KEY=GEMINI_API_KEY:latest,PINECONE_API_KEY=PINECONE_API_KEY:latest,PINECONE_INDEX_NAME=PINECONE_INDEX_NAME:latest,BIGQUERY_DATASET_ID=BIGQUERY_DATASET_ID:latest,BIGQUERY_TABLE_ID=BIGQUERY_TABLE_ID:latest,NEO4J_PASSWORD=NEO4J_PASSWORD:latest \
           --set-env-vars=EMBEDDING_MODEL_NAME=${_EMBEDDING_MODEL},NEO4J_URI=${_NEO4J_URI},NEO4J_USERNAME=${_NEO4J_USER},NEO4J_DATABASE=${_NEO4J_DB} \
           --timeout=600s --concurrency=40 --cpu=2 --memory=4Gi \
-          $TRAFFIC_ARGS
+          $$TRAFFIC_ARGS
         if [ "${_TRAFFIC}" != "latest" ]; then
+          # La URL etiquetada es la del servicio con el prefijo "TAG---". Se construye
+          # así y no con un filtro de --format porque las proyecciones de gcloud no
+          # saben filtrar una lista por el valor de uno de sus campos.
+          BASE=$(gcloud run services describe ${_SERVICE_NAME} --region europe-west1 \
+                   --project ${PROJECT_ID} --format='value(status.url)')
           echo "=============================================================="
-          echo "Revisión desplegada SIN tráfico. Pruébala en la URL etiquetada:"
-          gcloud run services describe ${_SERVICE_NAME} --region europe-west1 \
-            --project ${PROJECT_ID} --format="value(status.traffic.filter(tag=${_CANARY_TAG}).url)"
-          echo "Cuando convenza:  scripts/deploy.sh promote ${_ENV}"
+          echo "Revisión desplegada SIN tráfico. Pruébala aquí:"
+          echo "  https://${_CANARY_TAG}---$${BASE#https://}"
+          echo "Cuando convenza:  ./scripts/deploy.sh promote ${_ENV}"
           echo "=============================================================="
         fi
     waitFor: ['Push-Backend-Image']
@@ -78,16 +83,23 @@ steps:
   # 3. Frontend: panel de administración (React) — el widget de chat es estático
   # -------------------------------------------------------------------------------------
   - name: 'gcr.io/cloud-builders/npm'
-    id: 'Install-Admin-Panel'
-    args: ['ci']
+    id: 'Build-Admin-Panel'
+    entrypoint: 'bash'
     dir: 'public/admin-panel'
     waitFor: ['-']            # en paralelo con el backend
-
-  - name: 'gcr.io/cloud-builders/npm'
-    id: 'Build-Admin-Panel'
-    args: ['run', 'build']
-    dir: 'public/admin-panel'
-    waitFor: ['Install-Admin-Panel']
+    args:
+      - '-c'
+      - |
+        set -euo pipefail
+        if [ "${_TRAFFIC}" != "latest" ]; then
+          echo "Modo canary: el panel no se compila (no se despliega hosting)."
+          exit 0
+        fi
+        # `npm ci` exige que package.json y package-lock.json estén sincronizados, y
+        # hoy no lo están (typescript 5.8.3 en el lock frente a 4.9.5 en package.json).
+        # Se intenta la vía reproducible y se cae a `npm install` si falla.
+        npm ci || { echo "AVISO: package-lock.json desincronizado; usando npm install"; npm install; }
+        npm run build
 
   # -------------------------------------------------------------------------------------
   # 4. Firebase Hosting. En canary NO se despliega: el frontend iría al 100% de usuarios
@@ -108,6 +120,7 @@ steps:
         ./node_modules/.bin/firebase deploy --only hosting \
           --project ${_FIREBASE_PROJECT_ALIAS} --non-interactive --force
     waitFor: ['Deploy-Backend', 'Build-Admin-Panel']
+    dir: '.'
 
 # =====================================================================================
 # Valores por defecto: entorno DEV, que es el entorno vivo, y despliegue CANARY,

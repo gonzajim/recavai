@@ -43,8 +43,12 @@ TAG="canary"
 say() { printf '\n\033[1m==> %s\033[0m\n' "$*"; }
 
 canary_url() {
-  gcloud run services describe "$SERVICE" --region "$REGION" --project "$PROJECT" \
-    --format="value(status.traffic.filter(tag=$TAG).url)" 2>/dev/null | head -1
+  # Cloud Run expone la revisión etiquetada en la URL del servicio con el prefijo
+  # "TAG---". Se compone a mano porque las proyecciones de --format no filtran listas.
+  local base
+  base=$(gcloud run services describe "$SERVICE" --region "$REGION" --project "$PROJECT" \
+           --format='value(status.url)' 2>/dev/null)
+  [[ -n "$base" ]] && echo "https://$TAG---${base#https://}"
 }
 
 case "$ACTION" in
@@ -112,8 +116,8 @@ EOF
     gcloud run services describe "$SERVICE" --region "$REGION" --project "$PROJECT" \
       --format="table(status.traffic[].revisionName, status.traffic[].percent, status.traffic[].tag)"
     URL=$(gcloud run services describe "$SERVICE" --region "$REGION" --project "$PROJECT" --format="value(status.url)")
-    say "Salud"
-    curl -fsS --max-time 15 "$URL/health" && echo || echo "  /health no responde"
+    say "Salud (el arranque en frío tarda ~30 s: carga el modelo de embeddings)"
+    curl -fsS --max-time 90 "$URL/health" && echo || echo "  /health no responde"
     ;;
 
   *)
