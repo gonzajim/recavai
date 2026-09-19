@@ -32,7 +32,7 @@ Objetivo: ~50 preguntas, repartidas por `categoria` (CSDDD/GRI/general),
 Instala deps si hace falta: `pip install pinecone sentence-transformers google-genai requests`
 
 ```bash
-cd recava-agent-audit
+cd recavai
 set -a; source .env; set +a       # PINECONE_*, GEMINI_API_KEY
 
 # Línea base del índice de producción. El --embedding-model DEBE ser el que

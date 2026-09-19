@@ -91,7 +91,7 @@ Hasta que eso exista, `./scripts/deploy.sh canary prod` pide confirmación y avi
 
 ## 4. Despliegue automático
 
-No hay ninguno, y conviene saberlo: [`trigger.yaml`](../trigger.yaml) describe un trigger que dispara con *push* a `main` sobre el proyecto `recava-agent-audit`, **que ya no es accesible**. Ese trigger está muerto desde hace tiempo; los despliegues de los últimos meses se han hecho a mano.
+No hay ninguno. Existía un `trigger.yaml` que describía un trigger disparado por *push* a `main` sobre un proyecto GCP que ya no es accesible: llevaba muerto meses y se retiró el 19/09/2026. Los despliegues de los últimos meses se han hecho a mano.
 
 Para restaurarlo, en un proyecto que sí exista:
 
@@ -99,7 +99,7 @@ Para restaurarlo, en un proyecto que sí exista:
 gcloud builds triggers create github \
   --project=recava-auditor-dev --region=europe-west1 \
   --name=orchestrator-dev-canary \
-  --repo-name=recava-agent-audit --repo-owner=gonzajim \
+  --repo-name=recavai --repo-owner=gonzajim \
   --branch-pattern='^main$' --build-config=cloudbuild.yaml \
   --substitutions=_ENV=dev,_SERVICE_NAME=orchestrator-dev,_FIREBASE_PROJECT_ALIAS=dev,_TRAFFIC=canary
 ```

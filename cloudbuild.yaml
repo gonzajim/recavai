@@ -1,9 +1,9 @@
 # =====================================================================================
 # cloudbuild.yaml — despliegue del orquestador + hosting, parametrizado por entorno
 # =====================================================================================
-# NO se ejecuta solo: el trigger antiguo (trigger.yaml) apuntaba al proyecto
-# `recava-agent-audit`, que ya no es accesible, así que estaba muerto. Hasta que se cree
-# un trigger nuevo, este fichero se lanza a mano con `scripts/deploy.sh` o con:
+# NO se ejecuta solo: el trigger antiguo apuntaba a un proyecto GCP que ya no es
+# accesible, llevaba meses muerto y se retiró. Hasta que se cree un trigger nuevo,
+# este fichero se lanza a mano con `scripts/deploy.sh` o con:
 #
 #   gcloud builds submit --config=cloudbuild.yaml --project=recava-auditor-dev \
 #     --substitutions=_SERVICE_NAME=orchestrator-dev,_FIREBASE_PROJECT_ALIAS=dev,_TRAFFIC=latest

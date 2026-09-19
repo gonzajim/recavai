@@ -1,4 +1,4 @@
-# SPEC — RecavAI (recava-agent-audit)
+# SPEC — RecavAI (repositorio `recavai`)
 
 > **Machine-readable specification for spec-driven development (SDD).**
 > Normative document. Every requirement has a stable ID. Agents implementing, modifying or reviewing this system MUST treat this file as the contract and `docs/documentacion.html` as its human narrative.
