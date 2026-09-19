@@ -1,0 +1,705 @@
+<title>RecavAI por dentro</title>
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Spectral:wght@400;500;600&family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap">
+<style>
+  /* ---------- tokens: claro (completo, en :root desnudo) ---------- */
+  :root{
+    --ground:#f5f2f3; --surface:#ffffff; --surface-2:#efeaec; --surface-3:#e7e0e2;
+    --line:#ded4d7; --line-strong:#c2b3b7;
+    --ink:#1d161a; --ink-2:#574a4f; --ink-3:#8b7b80;
+    --uclm:#8C1B3A; --uclm-deep:#6D142C; --uclm-wash:#f8e7ec;
+    --ok:#2f6b47; --ok-wash:#e5f0e8;
+    --warn:#8a5a12; --warn-wash:#f8eeda;
+    --risk:#a3321f; --risk-wash:#fbe7e2;
+    --info:#2a5673; --info-wash:#e5eef4;
+    --shadow:0 1px 2px rgba(29,22,26,.05), 0 10px 24px -18px rgba(29,22,26,.28);
+    --f-display:'Spectral', Georgia, 'Times New Roman', serif;
+    --f-body:'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+    --f-mono:'JetBrains Mono', ui-monospace, SFMono-Regular, Consolas, monospace;
+  }
+  @media (prefers-color-scheme: dark){
+    :root:not([data-theme="light"]){
+      --ground:#171216; --surface:#1e1719; --surface-2:#271f22; --surface-3:#31272b;
+      --line:#3b2f33; --line-strong:#523f46;
+      --ink:#f0e8ea; --ink-2:#b8a8ad; --ink-3:#897a7f;
+      --uclm:#e08ba0; --uclm-deep:#f2adbd; --uclm-wash:#3b2029;
+      --ok:#7fc297; --ok-wash:#1d2f24;
+      --warn:#dcac5f; --warn-wash:#33281a;
+      --risk:#e58e79; --risk-wash:#37211d;
+      --info:#8cbad5; --info-wash:#1b2a33;
+      --shadow:0 1px 2px rgba(0,0,0,.5), 0 12px 30px -18px rgba(0,0,0,.7);
+    }
+  }
+  :root[data-theme="dark"]{
+    --ground:#171216; --surface:#1e1719; --surface-2:#271f22; --surface-3:#31272b;
+    --line:#3b2f33; --line-strong:#523f46;
+    --ink:#f0e8ea; --ink-2:#b8a8ad; --ink-3:#897a7f;
+    --uclm:#e08ba0; --uclm-deep:#f2adbd; --uclm-wash:#3b2029;
+    --ok:#7fc297; --ok-wash:#1d2f24;
+    --warn:#dcac5f; --warn-wash:#33281a;
+    --risk:#e58e79; --risk-wash:#37211d;
+    --info:#8cbad5; --info-wash:#1b2a33;
+    --shadow:0 1px 2px rgba(0,0,0,.5), 0 12px 30px -18px rgba(0,0,0,.7);
+  }
+
+  *{ box-sizing:border-box; }
+  body{ margin:0; background:var(--ground); color:var(--ink);
+        font-family:var(--f-body); font-size:15.5px; line-height:1.65;
+        -webkit-font-smoothing:antialiased; }
+  ::selection{ background:var(--uclm-wash); color:var(--ink); }
+  a{ color:var(--uclm); text-decoration:none; }
+  a:hover{ text-decoration:underline; }
+  :focus-visible{ outline:2px solid var(--uclm); outline-offset:2px; border-radius:3px; }
+  @media (prefers-reduced-motion: reduce){ *{ animation:none !important; transition:none !important; } }
+
+  /* ---------- shell ---------- */
+  .shell{ max-width:1200px; margin:0 auto; padding:0 clamp(1rem,4vw,2.25rem) 5rem;
+          display:grid; grid-template-columns:1fr; gap:0 3rem; }
+  @media (min-width:960px){
+    .shell{ grid-template-columns:15.5rem minmax(0,1fr); }
+    .masthead{ grid-column:1 / -1; }
+  }
+
+  /* ---------- masthead ---------- */
+  .masthead{ padding:clamp(2.5rem,6vw,4.5rem) 0 2rem; border-bottom:3px solid var(--uclm); margin-bottom:2.5rem; }
+  .eyebrow{ font-family:var(--f-mono); font-size:.7rem; letter-spacing:.16em; text-transform:uppercase;
+            color:var(--uclm); font-weight:500; }
+  h1{ font-family:var(--f-display); font-weight:600; font-size:clamp(2.1rem,5.4vw,3.15rem);
+      line-height:1.08; letter-spacing:-.015em; margin:.55rem 0 0; text-wrap:balance; max-width:20ch; }
+  .standfirst{ font-size:1.08rem; color:var(--ink-2); max-width:62ch; margin:1rem 0 0; }
+  .facts{ display:flex; flex-wrap:wrap; gap:.4rem .5rem; margin-top:1.5rem; }
+  .fact{ font-family:var(--f-mono); font-size:.72rem; padding:.3rem .6rem; border:1px solid var(--line);
+         border-radius:999px; color:var(--ink-2); background:var(--surface); }
+  .fact b{ color:var(--ink); font-weight:500; }
+
+  /* ---------- nav ---------- */
+  nav{ margin-bottom:2.5rem; }
+  @media (min-width:960px){
+    nav{ position:sticky; top:calc(env(safe-area-inset-top, 0px) + 1.5rem); align-self:start; max-height:calc(100vh - 4rem); overflow-y:auto; }
+  }
+  .nav-title{ font-family:var(--f-mono); font-size:.66rem; letter-spacing:.14em; text-transform:uppercase;
+              color:var(--ink-3); margin-bottom:.7rem; }
+  .nav-list{ list-style:none; margin:0; padding:0; display:flex; flex-wrap:wrap; gap:.35rem; }
+  @media (min-width:960px){ .nav-list{ flex-direction:column; flex-wrap:nowrap; gap:0; } }
+  .nav-list a{ display:flex; gap:.6rem; align-items:baseline; color:var(--ink-2); font-size:.86rem;
+               padding:.3rem .55rem; border-radius:6px; border:1px solid var(--line); background:var(--surface); }
+  @media (min-width:960px){ .nav-list a{ border:none; background:none; padding:.26rem .4rem; } }
+  .nav-list a:hover{ color:var(--uclm); background:var(--uclm-wash); text-decoration:none; }
+  .nav-list .n{ font-family:var(--f-mono); font-size:.72rem; color:var(--ink-3); }
+
+  /* ---------- sections ---------- */
+  main{ min-width:0; }
+  section{ margin-bottom:3.5rem; scroll-margin-top:1.5rem; }
+  .sec-head{ display:flex; gap:.85rem; align-items:baseline; margin-bottom:1rem;
+             padding-bottom:.55rem; border-bottom:1px solid var(--line); }
+  .sec-num{ font-family:var(--f-mono); font-size:.9rem; font-weight:500; color:var(--uclm); flex:0 0 auto; }
+  h2{ font-family:var(--f-display); font-weight:600; font-size:1.55rem; line-height:1.2; margin:0; text-wrap:balance; }
+  h3{ font-size:1rem; font-weight:600; margin:1.8rem 0 .5rem; letter-spacing:-.005em; }
+  h4{ font-size:.82rem; font-weight:600; margin:1.2rem 0 .4rem; color:var(--ink-2);
+      font-family:var(--f-mono); letter-spacing:.04em; text-transform:uppercase; }
+  p{ margin:.75rem 0; max-width:68ch; }
+  ul,ol{ max-width:68ch; padding-left:1.15rem; }
+  li{ margin:.35rem 0; }
+  code{ font-family:var(--f-mono); font-size:.855em; background:var(--surface-2);
+        padding:.1em .35em; border-radius:4px; color:var(--ink); }
+  strong{ font-weight:600; }
+
+  /* ---------- chips ---------- */
+  .chip{ display:inline-flex; align-items:center; gap:.3rem; font-family:var(--f-mono); font-size:.66rem;
+         letter-spacing:.04em; text-transform:uppercase; padding:.18rem .45rem; border-radius:4px;
+         font-weight:500; white-space:nowrap; }
+  .c-prod{ background:var(--ok-wash); color:var(--ok); }
+  .c-legacy{ background:var(--surface-3); color:var(--ink-3); }
+  .c-off{ background:var(--info-wash); color:var(--info); }
+  .c-res{ background:var(--uclm-wash); color:var(--uclm); }
+  .c-debt{ background:var(--warn-wash); color:var(--warn); }
+
+  /* ---------- panels ---------- */
+  .panel{ background:var(--surface); border:1px solid var(--line); border-radius:10px;
+          padding:1rem 1.15rem; margin:1.1rem 0; box-shadow:var(--shadow); }
+  .panel-note{ border-left:3px solid var(--uclm); border-radius:0 8px 8px 0; background:var(--uclm-wash);
+               box-shadow:none; border-top:none; border-right:none; border-bottom:none; padding:.85rem 1.1rem; }
+  .panel-label{ font-family:var(--f-mono); font-size:.66rem; letter-spacing:.1em; text-transform:uppercase;
+                color:var(--uclm); font-weight:500; display:block; margin-bottom:.35rem; }
+  .panel p:first-of-type{ margin-top:0; } .panel p:last-child{ margin-bottom:0; }
+
+  /* ---------- grids ---------- */
+  .cards{ display:grid; gap:.85rem; margin:1.1rem 0; grid-template-columns:repeat(auto-fit,minmax(15rem,1fr)); }
+  .card{ background:var(--surface); border:1px solid var(--line); border-radius:10px; padding:.9rem 1rem; }
+  .card h5{ margin:0 0 .3rem; font-size:.92rem; font-weight:600; }
+  .card p{ margin:.25rem 0 0; font-size:.86rem; color:var(--ink-2); max-width:none; }
+  .card .chip{ margin-bottom:.45rem; }
+
+  /* ---------- key/value ---------- */
+  .kv{ display:grid; grid-template-columns:11rem minmax(0,1fr); gap:.3rem .9rem; margin:.9rem 0; font-size:.9rem; }
+  .kv dt{ font-family:var(--f-mono); font-size:.74rem; color:var(--ink-3); text-transform:uppercase;
+          letter-spacing:.04em; padding-top:.18rem; }
+  .kv dd{ margin:0; }
+  @media (max-width:560px){ .kv{ grid-template-columns:1fr; } .kv dt{ margin-top:.5rem; } }
+
+  /* ---------- tables ---------- */
+  .scroll{ overflow-x:auto; margin:1.1rem 0; border:1px solid var(--line); border-radius:10px; background:var(--surface); }
+  table{ width:100%; border-collapse:collapse; font-size:.845rem; min-width:34rem; }
+  th{ text-align:left; font-family:var(--f-mono); font-size:.65rem; letter-spacing:.06em; text-transform:uppercase;
+      color:var(--ink-3); background:var(--surface-2); padding:.55rem .7rem; border-bottom:1px solid var(--line-strong);
+      white-space:nowrap; font-weight:500; }
+  td{ padding:.55rem .7rem; border-bottom:1px solid var(--line); vertical-align:top; }
+  tbody tr:last-child td{ border-bottom:none; }
+  td.mono, th.mono, .num{ font-family:var(--f-mono); font-size:.8rem; font-variant-numeric:tabular-nums; white-space:nowrap; }
+  td.num{ text-align:right; }
+
+  /* ---------- diagram ---------- */
+  .diagram{ margin:1.4rem 0; }
+  .band{ background:var(--surface); border:1px solid var(--line); border-radius:12px; padding:.75rem .85rem; }
+  .band-label{ font-family:var(--f-mono); font-size:.64rem; letter-spacing:.12em; text-transform:uppercase;
+               color:var(--ink-3); margin-bottom:.55rem; }
+  .tiles{ display:grid; gap:.55rem; grid-template-columns:repeat(auto-fit,minmax(9.5rem,1fr)); }
+  .tile{ border:1px solid var(--line); border-radius:8px; padding:.55rem .65rem; background:var(--surface-2); }
+  .tile.accent{ border-color:var(--uclm); background:var(--uclm-wash); }
+  .tile b{ display:block; font-size:.83rem; font-weight:600; }
+  .tile span{ display:block; font-family:var(--f-mono); font-size:.68rem; color:var(--ink-3); margin-top:.15rem; line-height:1.4; }
+  .flow{ display:flex; align-items:center; justify-content:center; gap:.6rem; padding:.45rem 0; }
+  .flow::before, .flow::after{ content:""; flex:1; height:1px; background:var(--line-strong); max-width:6rem; }
+  .flow span{ font-family:var(--f-mono); font-size:.66rem; color:var(--ink-2); background:var(--ground);
+              padding:0 .2rem; text-align:center; }
+
+  /* ---------- debt ---------- */
+  .debt{ display:grid; gap:.6rem; margin:1.1rem 0; }
+  .debt-item{ display:grid; grid-template-columns:auto minmax(0,1fr); gap:0 .9rem;
+              background:var(--surface); border:1px solid var(--line); border-radius:8px; overflow:hidden; }
+  .sev{ width:4px; }
+  .sev-hi{ background:var(--risk); } .sev-md{ background:var(--warn); } .sev-lo{ background:var(--ink-3); }
+  .debt-body{ padding:.7rem .9rem .75rem 0; }
+  .debt-body b{ font-size:.9rem; }
+  .debt-body p{ margin:.2rem 0 0; font-size:.855rem; color:var(--ink-2); max-width:none; }
+  .debt-meta{ font-family:var(--f-mono); font-size:.66rem; color:var(--ink-3); margin-top:.3rem; display:block; }
+
+  footer{ border-top:1px solid var(--line); padding-top:1.2rem; margin-top:1rem;
+          font-size:.8rem; color:var(--ink-3); max-width:68ch; }
+</style>
+
+<div class="shell">
+
+  <header class="masthead">
+    <div class="eyebrow">RECAVA-IA · Documentación del sistema</div>
+    <h1>RecavAI por dentro</h1>
+    <p class="standfirst">Asistente conversacional de cumplimiento en sostenibilidad para el marco europeo: qué hace, cómo está construido, qué ve el usuario en pantalla y qué partes todavía no están donde deberían. Escrito a partir del código de la rama de trabajo, no de la intención.</p>
+    <div class="facts">
+      <span class="fact"><b>Backend</b> Flask + Gunicorn en Cloud Run</span>
+      <span class="fact"><b>Modelo</b> Gemini 2.5 Flash</span>
+      <span class="fact"><b>Vectores</b> Pinecone · 384d</span>
+      <span class="fact"><b>Grafo</b> Neo4j AuraDB</span>
+      <span class="fact"><b>Región</b> europe-west1</span>
+      <span class="fact"><b>Revisión</b> 19 sep 2026</span>
+    </div>
+  </header>
+
+  <nav>
+    <div class="nav-title">Contenido</div>
+    <ul class="nav-list">
+      <li><a href="#s01"><span class="n">01</span> Qué es el sistema</a></li>
+      <li><a href="#s02"><span class="n">02</span> Arquitectura</a></li>
+      <li><a href="#s03"><span class="n">03</span> Los dos modos</a></li>
+      <li><a href="#s04"><span class="n">04</span> Interfaz y experiencia</a></li>
+      <li><a href="#s05"><span class="n">05</span> El motor RAG</a></li>
+      <li><a href="#s06"><span class="n">06</span> Corpus y base de conocimiento</a></li>
+      <li><a href="#s07"><span class="n">07</span> API REST</a></li>
+      <li><a href="#s08"><span class="n">08</span> Modelo de datos</a></li>
+      <li><a href="#s09"><span class="n">09</span> Seguridad y acceso</a></li>
+      <li><a href="#s10"><span class="n">10</span> Infraestructura</a></li>
+      <li><a href="#s11"><span class="n">11</span> Calidad y evaluación</a></li>
+      <li><a href="#s12"><span class="n">12</span> Deuda técnica</a></li>
+    </ul>
+  </nav>
+
+  <main>
+
+    <!-- ================= 01 ================= -->
+    <section id="s01">
+      <div class="sec-head"><span class="sec-num">01</span><h2>Qué es el sistema</h2></div>
+
+      <p>RecavAI es un asistente conversacional que ayuda a equipos de sostenibilidad, asesores y auditores a trabajar con la normativa europea de sostenibilidad: la directiva de información corporativa (CSRD) y sus estándares técnicos, la directiva de diligencia debida (CSDDD), los estándares GRI y las guías de la OCDE. El usuario pregunta en lenguaje natural y el sistema responde citando los documentos concretos en los que se apoya.</p>
+
+      <p>Nace del proyecto RECAVA-IA, una iniciativa de la Universidad de Castilla-La Mancha. El sistema atiende dos necesidades distintas, y por eso tiene dos modos de uso que comparten la misma base documental pero se comportan de forma muy diferente.</p>
+
+      <div class="cards">
+        <div class="card">
+          <h5>Modo Asesor</h5>
+          <p>Preguntas y respuestas sobre normativa. El usuario lleva la iniciativa; el sistema responde con citas numeradas y desplegables a los fragmentos de origen.</p>
+        </div>
+        <div class="card">
+          <h5>Modo Auditor</h5>
+          <p>Entrevista guiada en ocho bloques. El sistema lleva la iniciativa: pregunta, recoge evidencia, detecta brechas y cierra cada bloque con un resumen de hallazgos.</p>
+        </div>
+      </div>
+
+      <h3>Quién usa qué</h3>
+      <p>Hay dos aplicaciones desplegadas por separado. El <strong>widget de chat</strong> es para los usuarios finales. El <strong>panel de experto</strong> es para el equipo del proyecto: permite revisar el historial de conversaciones y, para el administrador, gestionar las cuentas de usuario.</p>
+
+      <div class="scroll">
+        <table>
+          <thead><tr><th>Aplicación</th><th>Dirección</th><th>Quién entra</th></tr></thead>
+          <tbody>
+            <tr><td>Widget de chat</td><td class="mono">recava-auditor-dev.web.app</td><td>Cualquier usuario registrado con email verificado</td></tr>
+            <tr><td>Panel de experto</td><td class="mono">recava-auditor-dev-panel.web.app</td><td>Equipo del proyecto; la pestaña de usuarios, solo el administrador</td></tr>
+            <tr><td>Orquestador (API)</td><td class="mono">orchestrator-dev · Cloud Run</td><td>No se usa directamente; lo llaman las dos anteriores</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+    <!-- ================= 02 ================= -->
+    <section id="s02">
+      <div class="sec-head"><span class="sec-num">02</span><h2>Arquitectura</h2></div>
+
+      <p>Todo pasa por un único servicio backend. El navegador nunca habla directamente con el modelo de lenguaje ni con la base de datos vectorial: envía el mensaje al orquestador con su credencial de Firebase, y el orquestador decide qué buscar, a quién preguntar y qué devolver.</p>
+
+      <div class="diagram">
+        <div class="band">
+          <div class="band-label">Cliente — navegador</div>
+          <div class="tiles">
+            <div class="tile"><b>Widget de chat</b><span>HTML + JS · Firebase Hosting</span></div>
+            <div class="tile"><b>Panel de experto</b><span>React + MUI · Firebase Hosting</span></div>
+            <div class="tile"><b>Firebase Auth</b><span>login, registro, verificación</span></div>
+          </div>
+        </div>
+
+        <div class="flow"><span>HTTPS · Authorization: Bearer &lt;ID token&gt;</span></div>
+
+        <div class="band">
+          <div class="band-label">Orquestador — Cloud Run · europe-west1</div>
+          <div class="tiles">
+            <div class="tile accent"><b>app.py</b><span>rutas, auth, CORS, límites</span></div>
+            <div class="tile accent"><b>gemini_service</b><span>turno de chat, herramientas</span></div>
+            <div class="tile accent"><b>rag_service</b><span>embeddings, búsqueda, routing</span></div>
+            <div class="tile accent"><b>history / persistence</b><span>historial y trazas</span></div>
+          </div>
+        </div>
+
+        <div class="flow"><span>llamadas salientes en cada turno</span></div>
+
+        <div class="band">
+          <div class="band-label">Servicios externos</div>
+          <div class="tiles">
+            <div class="tile"><b>Gemini 2.5 Flash</b><span>generación y tool-calling</span></div>
+            <div class="tile"><b>Pinecone</b><span>corpus + ficheros de usuario</span></div>
+            <div class="tile"><b>Neo4j AuraDB</b><span>grafo de entidades</span></div>
+            <div class="tile"><b>Firestore</b><span>hilos, progreso, ficheros</span></div>
+            <div class="tile"><b>BigQuery</b><span>analítica de conversaciones</span></div>
+          </div>
+        </div>
+      </div>
+
+      <p>Los embeddings se calculan <em>dentro</em> del contenedor con <code>sentence-transformers</code>, no con una API externa. Por eso el servicio necesita 2 vCPU y 4 GiB de memoria: carga el modelo en RAM al arrancar.</p>
+
+      <h3>Mapa de módulos</h3>
+
+      <div class="scroll">
+        <table>
+          <thead><tr><th>Módulo</th><th>Responsabilidad</th><th>Estado</th></tr></thead>
+          <tbody>
+            <tr><td class="mono">app.py</td><td>Rutas HTTP, verificación de token, CORS, límites de tasa, propiedad de hilos, endpoints de administración</td><td><span class="chip c-prod">Producción</span></td></tr>
+            <tr><td class="mono">src/config.py</td><td>Carga de variables de entorno e inicialización de clientes (Gemini, Pinecone, BigQuery, modelo de embeddings)</td><td><span class="chip c-prod">Producción</span></td></tr>
+            <tr><td class="mono">src/gemini_service.py</td><td>Turno de conversación de cada modo, bucle de llamadas a herramientas, construcción del mensaje aumentado con los fragmentos</td><td><span class="chip c-prod">Producción</span></td></tr>
+            <tr><td class="mono">src/rag_service.py</td><td>Embeddings, búsqueda en Pinecone, filtro por categoría, clasificación de la pregunta, consulta al grafo, troceado de PDFs subidos</td><td><span class="chip c-prod">Producción</span></td></tr>
+            <tr><td class="mono">src/assistant_instructions.py</td><td>Prompts de sistema: el guion del auditor con sus ocho bloques y el del asesor</td><td><span class="chip c-prod">Producción</span></td></tr>
+            <tr><td class="mono">src/history_service.py</td><td>Lee el historial de Firestore y lo convierte al formato que Gemini acepta, saneando la alternancia de turnos</td><td><span class="chip c-prod">Producción</span></td></tr>
+            <tr><td class="mono">src/persistence_service.py<br>src/bigquery_service.py</td><td>Registro de cada turno en BigQuery y consultas de historial para el panel</td><td><span class="chip c-prod">Producción</span></td></tr>
+            <tr><td class="mono">src/context_orchestrator.py</td><td>Búsqueda concurrente en Pinecone y FAISS con un pool de hilos reutilizado</td><td><span class="chip c-legacy">Parcial</span></td></tr>
+            <tr><td class="mono">src/local_vector_store.py</td><td>Índice FAISS en memoria por sesión, para ficheros efímeros</td><td><span class="chip c-legacy">Legado</span></td></tr>
+            <tr><td class="mono">src/corpus_pipeline.py</td><td>Indexación del corpus: troceado semántico, jerarquía jurídica, enriquecimiento. Proceso <em>offline</em>, no forma parte del servicio</td><td><span class="chip c-off">Offline</span></td></tr>
+            <tr><td class="mono">src/rag_benchmark.py<br>src/kb_experiment.py</td><td>Medición de calidad de recuperación y experimento factorial de la línea de investigación</td><td><span class="chip c-res">Investigación</span></td></tr>
+            <tr><td class="mono">public/chatbot/</td><td>Widget de chat: una página, una hoja de estilos y un script de ~1.900 líneas sin framework</td><td><span class="chip c-prod">Producción</span></td></tr>
+            <tr><td class="mono">public/admin-panel/</td><td>Panel de experto en React con Material UI</td><td><span class="chip c-prod">Producción</span></td></tr>
+            <tr><td class="mono">functions/index.js</td><td>Dos Cloud Functions que leen y actualizan el historial en BigQuery para el panel</td><td><span class="chip c-prod">Producción</span></td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <div class="panel panel-note">
+        <span class="panel-label">Una decisión que explica mucho del resto</span>
+        <p>El modelo de embeddings vive en el contenedor y <strong>debe ser el mismo con el que se indexó el corpus</strong>. Cambiarlo obliga a reindexar todo. Hoy es <code>all-MiniLM-L6-v2</code>, un modelo entrenado en inglés, sobre un corpus en español: es el compromiso heredado del primer montaje y la razón de que exista una línea de investigación sobre ello.</p>
+      </div>
+    </section>
+
+    <!-- ================= 03 ================= -->
+    <section id="s03">
+      <div class="sec-head"><span class="sec-num">03</span><h2>Los dos modos</h2></div>
+
+      <h3>Asesor</h3>
+      <p>Es el modo de consulta. El usuario pregunta, el sistema busca en el corpus y en los documentos que ese usuario haya subido, y responde. La respuesta lleva marcas <code>[1]</code>, <code>[2]</code>… que se corresponden con la lista de fragmentos que el backend devuelve en el campo <code>sources</code>, de modo que el usuario puede comprobar de dónde sale cada afirmación.</p>
+
+      <h3>Auditor</h3>
+      <p>Es el modo de entrevista. El sistema conduce una auditoría preliminar en ocho bloques temáticos. En cada turno recibe, inyectado en su prompt, el estado de la auditoría: qué bloques están cerrados, cuál está activo y qué resúmenes se han generado. Dispone de dos herramientas que puede invocar por su cuenta:</p>
+
+      <div class="cards">
+        <div class="card">
+          <h5><code>invoke_sustainability_expert</code></h5>
+          <p>Cuando el entrevistado hace una pregunta técnica en mitad de la auditoría, el auditor se la pasa al asesor y devuelve su respuesta. Es el mismo motor del modo Asesor, invocado desde dentro.</p>
+        </div>
+        <div class="card">
+          <h5><code>complete_audit_block</code></h5>
+          <p>Cierra el bloque activo y guarda en Firestore un resumen de 3–5 frases con hallazgos, fortalezas, brechas y su clasificación de severidad.</p>
+        </div>
+      </div>
+
+      <p>El bucle de herramientas tiene un tope de seis rondas por turno, para que una cadena de llamadas no se descontrole. El prompt es explícito y repetitivo en un punto: cada bloque tiene preguntas marcadas <code>[M]</code> —obligatorias— y el bloque no puede cerrarse sin respuesta explícita a todas ellas. Una respuesta monosilábica no cuenta, salvo cuando la respuesta real es «no tenemos eso».</p>
+
+      <h4>Los ocho bloques</h4>
+      <div class="scroll">
+        <table>
+          <thead><tr><th class="mono">ID</th><th>Bloque</th><th>Qué se busca</th></tr></thead>
+          <tbody>
+            <tr><td class="mono">block_1</td><td>Contexto y alcance</td><td>Empresa, sector, países, plantilla, facturación, estructura jurídica, experiencia previa. Al cerrarlo, el sistema informa de la situación normativa de la empresa</td></tr>
+            <tr><td class="mono">block_2</td><td>Información corporativa</td><td>Informe de sostenibilidad, estándares seguidos, métricas, objetivos, verificación externa</td></tr>
+            <tr><td class="mono">block_3</td><td>Cadena de valor</td><td>Actividades aguas arriba y aguas abajo, proveedores, trazabilidad</td></tr>
+            <tr><td class="mono">block_4</td><td>Gobernanza y compliance</td><td>Órganos, políticas, códigos de conducta, canales de denuncia</td></tr>
+            <tr><td class="mono">block_5</td><td>Impacto ambiental</td><td>Emisiones, energía, agua, residuos, objetivos de reducción</td></tr>
+            <tr><td class="mono">block_6</td><td>Personas y derechos humanos</td><td>Empleo, diversidad, seguridad, derechos en la cadena de suministro</td></tr>
+            <tr><td class="mono">block_7</td><td>Riesgos y controles</td><td>Identificación de riesgos, mapa, controles, seguimiento</td></tr>
+            <tr><td class="mono">block_8</td><td>Conclusiones y roadmap</td><td>Síntesis, brechas priorizadas y plan de acción</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <p>Cada bloque lleva entre cuatro y nueve preguntas obligatorias según su alcance. El estado de cada uno —<code>pending</code>, <code>in_progress</code>, <code>completed</code>— se guarda por hilo de conversación y es lo que alimenta el panel de progreso de la interfaz.</p>
+    </section>
+
+    <!-- ================= 04 ================= -->
+    <section id="s04">
+      <div class="sec-head"><span class="sec-num">04</span><h2>Interfaz y experiencia</h2></div>
+
+      <p>El widget de chat está escrito a mano, sin framework: una página, una hoja de estilos y un script. Usa la identidad visual de la UCLM —el rojo <code>#8C1B3A</code> como color principal, tipografía Inter— y está pensado para incrustarse en una web mediante un iframe o para abrirse a pantalla completa.</p>
+
+      <h3>El recorrido del usuario</h3>
+      <div class="scroll">
+        <table>
+          <thead><tr><th class="mono">Paso</th><th>Pantalla</th><th>Qué ocurre</th></tr></thead>
+          <tbody>
+            <tr><td class="mono">1</td><td>Acceso</td><td>Correo y contraseña, con botones separados de entrar y registrarse, y enlace de recuperación de contraseña. Los errores de Firebase se traducen a mensajes en español</td></tr>
+            <tr><td class="mono">2</td><td>Aviso de verificación</td><td>Si la cuenta no tiene el email verificado aparece una banda superior con reenvío del correo. Sin verificación, el backend rechaza toda petición con un 403</td></tr>
+            <tr><td class="mono">3</td><td>Selección de modo</td><td>Dos tarjetas —Asesor y Auditor— y, debajo, la lista de conversaciones recientes para retomar una anterior</td></tr>
+            <tr><td class="mono">4</td><td>Conversación</td><td>El área de chat cambia de disposición según el modo elegido</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <h3>Dos disposiciones distintas</h3>
+      <div class="cards">
+        <div class="card">
+          <h5>Asesor — una columna</h5>
+          <p>Mensajes del usuario a la derecha sobre fondo verde claro, respuestas a la izquierda sobre gris. Bajo cada respuesta, un desplegable con las fuentes citadas. A un lado, la lista de documentos subidos.</p>
+        </div>
+        <div class="card">
+          <h5>Auditor — tres paneles</h5>
+          <p>A la izquierda, el progreso de los ocho bloques, plegable y con estado por bloque. En el centro, la conversación. A la derecha, dos pestañas: documentos e informe del bloque.</p>
+        </div>
+      </div>
+
+      <h3>Detalles de la interacción</h3>
+      <dl class="kv">
+        <dt>Citas</dt><dd>Las marcas <code>[n]</code> del texto se convierten en insignias pulsables. Al hacer clic, se despliega la lista de fuentes y se resalta la correspondiente, con su título, categoría, página y puntuación de relevancia.</dd>
+        <dt>Documentos</dt><dd>Se adjuntan PDF de hasta 20 MB, con un máximo de 25 por usuario. Aparecen en una lista con su nombre y un botón de borrado, y quedan disponibles en todas las conversaciones de esa persona.</dd>
+        <dt>Progreso</dt><dd>Cada bloque muestra su estado y, una vez cerrado, un enlace para leer el informe de hallazgos que generó el auditor.</dd>
+        <dt>Historial</dt><dd>La pantalla de inicio lista las conversaciones recientes con su fecha y su modo; al abrir una, se recuperan los mensajes y se continúa en el mismo hilo.</dd>
+        <dt>Escritura</dt><dd>Enter envía, Mayúsculas+Enter añade línea. Mientras el sistema responde se muestra un indicador de escritura, y un botón flotante devuelve al final de la conversación.</dd>
+        <dt>Móvil</dt><dd>La hoja de estilos adapta la interfaz por debajo de 480 px: los paneles laterales se pliegan y el chat ocupa el ancho completo.</dd>
+      </dl>
+
+      <h3>Panel de experto</h3>
+      <p>Aplicación React con Material UI y un tema propio en el rojo corporativo. Tras el acceso muestra el <strong>historial de chat</strong>: todas las conversaciones registradas, con buscador por texto y la posibilidad de escribir una «respuesta de experto» junto a cada turno —el mecanismo con el que el equipo corrige o mejora lo que contestó el sistema—. Si el usuario que entra es el administrador, aparece además la pestaña de <strong>gestión de usuarios</strong>: alta, edición, activación y borrado de cuentas. Ocultar la pestaña es solo una comodidad visual; la barrera real está en el backend, que vuelve a comprobar el permiso en cada petición.</p>
+    </section>
+
+    <!-- ================= 05 ================= -->
+    <section id="s05">
+      <div class="sec-head"><span class="sec-num">05</span><h2>El motor RAG</h2></div>
+
+      <p>RAG significa que el modelo no responde de memoria: primero se busca en los documentos, y lo que se encuentra se le pasa al modelo como contexto junto a la pregunta. El sistema hace esa búsqueda en tres sitios, en este orden, y los junta en una sola lista numerada.</p>
+
+      <div class="scroll">
+        <table>
+          <thead><tr><th class="mono">Orden</th><th>Fuente</th><th>Parámetros reales</th></tr></thead>
+          <tbody>
+            <tr><td class="mono">1</td><td>Documentos del usuario (su espacio propio en Pinecone)</td><td class="mono">top_k = 6 · score mínimo 0,25</td></tr>
+            <tr><td class="mono">2</td><td>FAISS en memoria (ficheros efímeros, legado)</td><td class="mono">top_k = 6 · score mínimo 0,30</td></tr>
+            <tr><td class="mono">3</td><td>Corpus normativo global</td><td class="mono">12 candidatos → score mínimo 0,55 → 6 resultados</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <p>El corpus global se consulta con un embudo: se piden doce candidatos, se descartan los que no llegan a 0,55 de similitud y se pasan como máximo seis al modelo. Los documentos del usuario aparecen siempre antes que el corpus, porque si alguien ha subido su propia política de sostenibilidad quiere que la respuesta hable de ella.</p>
+
+      <h3>Enrutado por tipo de pregunta</h3>
+      <p>Antes de buscar, el sistema clasifica la pregunta por las expresiones que contiene, y de ahí decide si además consulta el grafo de conocimiento:</p>
+
+      <div class="scroll">
+        <table>
+          <thead><tr><th>Tipo</th><th>Se reconoce por</th><th>Estrategia</th></tr></thead>
+          <tbody>
+            <tr><td>Recurso</td><td>«qué herramientas», «qué certificaciones», «principales sellos»…</td><td class="mono">híbrida (vectores + grafo)</td></tr>
+            <tr><td>Operativa</td><td>«qué pasos», «cómo hago», «qué documentos debo», «para cumplir»…</td><td class="mono">híbrida (vectores + grafo)</td></tr>
+            <tr><td>Conceptual</td><td>«qué es», «en qué consiste», «explica», «cómo funciona»…</td><td class="mono">semántica (solo vectores)</td></tr>
+            <tr><td>Desconocida</td><td>ninguna de las anteriores</td><td class="mono">semántica (solo vectores)</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <p>Cuando la estrategia es híbrida, se extraen del texto de la pregunta las entidades canónicas que el sistema conoce y se consulta Neo4j por sus relaciones —hasta cuarenta tripletas sujeto–relación–objeto—, que se añaden al contexto en una sección aparte. Es la parte más frágil del pipeline: depende de que la entidad aparezca escrita casi igual en la pregunta.</p>
+
+      <h3>Filtro por categoría</h3>
+      <p>Si la pregunta menciona términos propios de la CSDDD o de GRI, la búsqueda se restringe a esa categoría documental. Si el filtro devuelve cero resultados, se repite la búsqueda sin filtro: es preferible una respuesta con fuentes de otra categoría que ninguna respuesta.</p>
+
+      <h3>Presupuesto de contexto</h3>
+      <p>Los fragmentos se añaden mientras quepan en un presupuesto de <strong>180.000 caracteres</strong> para Gemini 2.5 Flash (540.000 si se usara Pro). Cada fragmento entra encabezado por su número, título, categoría, página y relevancia, y el mensaje final se cierra con la pregunta original. Ese encabezado numerado es lo que permite al modelo citar <code>[1]</code>, <code>[2]</code> y a la interfaz enlazar cada cita con su fuente.</p>
+    </section>
+
+    <!-- ================= 06 ================= -->
+    <section id="s06">
+      <div class="sec-head"><span class="sec-num">06</span><h2>Corpus y base de conocimiento</h2></div>
+
+      <p>El corpus reúne alrededor de 48 documentos en español: directivas y reglamentos europeos, estándares GRI, guías de la OCDE, un marco teórico y un glosario. Está indexado en Pinecone con 9.176 vectores.</p>
+
+      <div class="panel">
+        <span class="panel-label">Hallazgo medido, no estimado</span>
+        <p>Al inspeccionar el índice de producción se comprobó que hay <strong>un vector por bloque de maquetación</strong>, con una mediana de dos palabras por fragmento: el 79 % tiene cinco palabras o menos. No hay agregación semántica. Los campos <code>entities</code> y <code>triplets</code> existen en el esquema pero están vacíos. El script que generó ese índice no está en el repositorio, en ninguna rama ni en el historial.</p>
+      </div>
+
+      <p>Ese hallazgo motivó dos piezas nuevas, ambas <em>fuera</em> del servicio en línea:</p>
+
+      <div class="cards">
+        <div class="card">
+          <span class="chip c-off">Offline</span>
+          <h5>corpus_pipeline.py</h5>
+          <p>Troceado semántico por puntos de ruptura (percentil 80), entre 350 y 1.800 caracteres, sin solape, que nunca cruza un encabezado. Detecta la jerarquía (Título, Capítulo, Artículo, y las unidades de GRI y ESRS), añade una cabecera contextual al vector sin alterar el texto citado, y opcionalmente genera resúmenes, palabras clave, entidades y proposiciones con un modelo.</p>
+        </div>
+        <div class="card">
+          <span class="chip c-res">Investigación</span>
+          <h5>kb_experiment.py</h5>
+          <p>Experimento factorial que compara estrategias de troceado, modelos de embeddings, formulación literal o parafraseada y grafo normativo, con una métrica de precisión de cita a nivel de artículo.</p>
+        </div>
+      </div>
+
+      <div class="panel panel-note">
+        <span class="panel-label">Cómo se ejecuta el pipeline</span>
+        <p>Es un proceso por lotes que se lanza <strong>una vez por versión del corpus</strong>, no un servicio. Reindexa por completo el espacio de nombres indicado. Nunca debe apuntarse al índice de producción sin haber pasado antes el benchmark: cambiar el troceado o el modelo invalida todos los vectores existentes.</p>
+      </div>
+
+      <h3>Los PDF que sube el usuario siguen otro camino</h3>
+      <p>Cuando alguien adjunta un documento, no pasa por ese pipeline. Se extrae su texto, se trocea en ventanas fijas de 400 palabras con 50 de solape, hasta un máximo de 500 fragmentos, y se guardan en el espacio de nombres de ese usuario. En ese proceso se aplanan todas las páginas antes de trocear, de modo que los fragmentos resultantes <strong>no conservan el número de página</strong> —una diferencia real de calidad frente al corpus, que sí lo tiene.</p>
+    </section>
+
+    <!-- ================= 07 ================= -->
+    <section id="s07">
+      <div class="sec-head"><span class="sec-num">07</span><h2>API REST</h2></div>
+
+      <p>Todas las respuestas comparten forma: <code>{"ok": true, "data": {…}}</code> en caso de éxito y <code>{"ok": false, "error": {"message": …}}</code> en caso de fallo. Cada respuesta lleva una cabecera <code>X-Request-Id</code> que aparece también en los registros, lo que permite seguir una petición concreta de punta a punta.</p>
+
+      <div class="scroll">
+        <table>
+          <thead><tr><th class="mono">Método</th><th>Ruta</th><th>Acceso</th><th class="mono">Límite</th><th>Qué hace</th></tr></thead>
+          <tbody>
+            <tr><td class="mono">POST</td><td class="mono">/chat_assistant</td><td>Usuario</td><td class="mono">20/min · 3/s</td><td>Turno del modo Asesor. Devuelve respuesta y lista de fuentes</td></tr>
+            <tr><td class="mono">POST</td><td class="mono">/chat_auditor</td><td>Usuario</td><td class="mono">12/min · 2/s</td><td>Turno del modo Auditor, con estado de la auditoría y herramientas</td></tr>
+            <tr><td class="mono">GET</td><td class="mono">/audit_blocks</td><td>Público</td><td class="mono">120/min</td><td>Catálogo de los ocho bloques de auditoría</td></tr>
+            <tr><td class="mono">GET</td><td class="mono">/audit_progress/&lt;thread_id&gt;</td><td>Usuario</td><td class="mono">120/min</td><td>Estado y resúmenes de los bloques de un hilo</td></tr>
+            <tr><td class="mono">POST</td><td class="mono">/audit_progress/&lt;thread_id&gt;</td><td>Usuario</td><td class="mono">120/min</td><td>Actualiza el estado de un bloque</td></tr>
+            <tr><td class="mono">POST</td><td class="mono">/upload_document</td><td>Usuario</td><td class="mono">10/min</td><td>Sube un PDF (≤ 20 MB, ≤ 25 por usuario), lo trocea e indexa</td></tr>
+            <tr><td class="mono">GET</td><td class="mono">/user_files</td><td>Usuario</td><td class="mono">30/min</td><td>Lista los documentos del usuario</td></tr>
+            <tr><td class="mono">DELETE</td><td class="mono">/user_files/&lt;doc_id&gt;</td><td>Usuario</td><td class="mono">20/min</td><td>Borra el documento y sus vectores</td></tr>
+            <tr><td class="mono">GET</td><td class="mono">/chat_history/recents</td><td>Usuario</td><td class="mono">120/min</td><td>Conversaciones recientes del usuario</td></tr>
+            <tr><td class="mono">GET</td><td class="mono">/chat_history/thread/&lt;id&gt;</td><td>Usuario</td><td class="mono">120/min</td><td>Mensajes de un hilo concreto</td></tr>
+            <tr><td class="mono">POST</td><td class="mono">/admin/users</td><td>Admin</td><td class="mono">10/min</td><td>Crea una cuenta</td></tr>
+            <tr><td class="mono">GET</td><td class="mono">/admin/users</td><td>Admin</td><td class="mono">30/min</td><td>Lista cuentas (hasta 1.000)</td></tr>
+            <tr><td class="mono">PATCH</td><td class="mono">/admin/users/&lt;uid&gt;</td><td>Admin</td><td class="mono">20/min</td><td>Modifica una cuenta; no permite desactivar al administrador</td></tr>
+            <tr><td class="mono">DELETE</td><td class="mono">/admin/users/&lt;uid&gt;</td><td>Admin</td><td class="mono">10/min</td><td>Borra una cuenta; no permite borrar al administrador</td></tr>
+            <tr><td class="mono">POST</td><td class="mono">/admin/ingest_document</td><td><span class="chip c-debt">Usuario</span></td><td class="mono">10/min</td><td>Inserta un documento en el corpus global. <strong>Pese al prefijo, no exige rol de administrador</strong></td></tr>
+            <tr><td class="mono">GET</td><td class="mono">/health</td><td>Público</td><td class="mono">120/min</td><td>Comprobación de vida</td></tr>
+            <tr><td class="mono">GET</td><td class="mono">/readyz</td><td>Público</td><td class="mono">120/min</td><td>Comprobación de disponibilidad</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <p>Los dos endpoints de chat aceptan <code>message</code> (máximo 4.000 caracteres) y un <code>thread_id</code> opcional; si no se envía, el backend crea uno y lo devuelve. El cliente debe reutilizarlo para mantener la conversación.</p>
+    </section>
+
+    <!-- ================= 08 ================= -->
+    <section id="s08">
+      <div class="sec-head"><span class="sec-num">08</span><h2>Modelo de datos</h2></div>
+
+      <p>Cuatro almacenes, cada uno con un propósito distinto: Firestore guarda el estado vivo, Pinecone los vectores, Neo4j las relaciones y BigQuery la traza analítica.</p>
+
+      <h4>Firestore</h4>
+      <div class="scroll">
+        <table>
+          <thead><tr><th>Colección</th><th>Contenido</th></tr></thead>
+          <tbody>
+            <tr><td class="mono">threads/{thread_id}</td><td>Propietario del hilo. Es lo que impide que alguien lea la conversación de otro</td></tr>
+            <tr><td class="mono">threads/{thread_id}/messages/{id}</td><td>Turnos con <code>role</code> (user o model), <code>text</code> y <code>created_at</code></td></tr>
+            <tr><td class="mono">audit_progress/{thread_id}</td><td>Estado por bloque, resumen de hallazgos y marcas de tiempo</td></tr>
+            <tr><td class="mono">user_documents/{uid}/files/{doc_id}</td><td>Metadatos de cada PDF: nombre, número de fragmentos, tamaño y fecha de subida</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <h4>Pinecone</h4>
+      <div class="scroll">
+        <table>
+          <thead><tr><th>Espacio</th><th>Qué guarda</th><th>Metadatos</th></tr></thead>
+          <tbody>
+            <tr><td class="mono">(por defecto)</td><td>Corpus normativo: 9.176 vectores</td><td class="mono">text, source, page, total_pages, primary_category, block_type, entities, triplets, graph_importance</td></tr>
+            <tr><td class="mono">&lt;uid&gt;</td><td>Documentos subidos por ese usuario</td><td class="mono">text, doc_id, filename, chunk_index, uploaded</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <p>Aislar los documentos de cada usuario en su propio espacio de nombres es lo que garantiza que un PDF privado no aparezca jamás en la respuesta de otra persona.</p>
+
+      <h4>BigQuery</h4>
+      <p>Una tabla de historial con un registro por turno: identificador, marca de tiempo, hilo, mensaje del usuario, respuesta del sistema, respuesta corregida por el experto, endpoint de origen e identidad del usuario. Es la base del panel de experto y la única fuente para analizar el uso a lo largo del tiempo.</p>
+
+      <h4>Neo4j</h4>
+      <p>Nodos <code>Entity</code> unidos por relaciones <code>RELATED</code> con un predicado. Se consulta por coincidencia de nombre con las entidades detectadas en la pregunta.</p>
+    </section>
+
+    <!-- ================= 09 ================= -->
+    <section id="s09">
+      <div class="sec-head"><span class="sec-num">09</span><h2>Seguridad y acceso</h2></div>
+
+      <dl class="kv">
+        <dt>Identidad</dt><dd>Firebase Authentication. Cada petición lleva el token en la cabecera <code>Authorization: Bearer</code>; el backend lo verifica y <strong>exige que el email esté verificado</strong>, devolviendo 403 si no lo está.</dd>
+        <dt>Administración</dt><dd>Lista blanca de correos escrita en el código. El panel oculta la pestaña a quien no está en ella, pero la comprobación real se repite en el servidor en cada petición.</dd>
+        <dt>Propiedad</dt><dd>Al abrir o continuar un hilo se comprueba que pertenece a quien lo pide; si no existe, se crea a su nombre.</dd>
+        <dt>Orígenes</dt><dd>CORS con lista explícita de dominios —los dos de chat, los dos de panel y localhost— y credenciales habilitadas. Si la variable de entorno viene vacía o con comodín, se cae a la lista segura por defecto.</dd>
+        <dt>Tasa</dt><dd>120 peticiones por minuto de forma global, más límites específicos por endpoint. Los más estrictos son los que cuestan dinero o escriben: chat, subida de ficheros y administración.</dd>
+        <dt>Cabeceras</dt><dd><code>Cache-Control: no-store</code>, <code>X-Content-Type-Options: nosniff</code>, <code>X-Frame-Options: DENY</code>, <code>Referrer-Policy: no-referrer</code>.</dd>
+        <dt>Secretos</dt><dd>Claves de Gemini, Pinecone, BigQuery y Neo4j en Secret Manager, inyectadas como variables de entorno en el despliegue. El fichero <code>.env</code> local está excluido del control de versiones.</dd>
+      </dl>
+
+      <div class="panel">
+        <span class="panel-label">Dos puertas que hoy están abiertas</span>
+        <p><strong>Las reglas de Firestore permiten lectura y escritura a cualquiera</strong> (<code>allow read, write: if true</code>), con un comentario que dice «mientras probamos en local». Si esas reglas están publicadas en el proyecto, cualquiera con la configuración del cliente puede leer todas las conversaciones.</p>
+        <p style="margin-top:.6rem">El endpoint <strong><code>/admin/ingest_document</code> no comprueba el rol de administrador</strong>: usa la verificación de usuario normal. Cualquier cuenta con email verificado puede insertar contenido en el corpus global que alimenta las respuestas de todos.</p>
+      </div>
+    </section>
+
+    <!-- ================= 10 ================= -->
+    <section id="s10">
+      <div class="sec-head"><span class="sec-num">10</span><h2>Infraestructura</h2></div>
+
+      <dl class="kv">
+        <dt>Cómputo</dt><dd>Cloud Run en <code>europe-west1</code>: 2 vCPU, 4 GiB, concurrencia 40, tiempo máximo 600 s. Se despliega sin autenticación de plataforma porque la autenticación la hace la aplicación.</dd>
+        <dt>Contenedor</dt><dd>Imagen en dos etapas. <code>torch</code> se instala en una capa propia desde el índice de solo-CPU de PyTorch (unos 200 MB en lugar de 532), de modo que cambiar el resto de dependencias no obliga a descargarlo otra vez. La imagen final corre como usuario sin privilegios, con comprobación de salud y Gunicorn con cuatro trabajadores.</dd>
+        <dt>Integración continua</dt><dd>Cloud Build: construye y publica la imagen con caché embebida, despliega en Cloud Run, compila el panel de administración con npm y publica ambos sitios en Firebase Hosting. El paso de Firebase está marcado para no tumbar el despliegue del backend si falla.</dd>
+        <dt>Hosting</dt><dd>Dos objetivos en el mismo proyecto: <code>chatbot</code> sirve la carpeta estática del widget; <code>admin-panel</code> sirve la compilación de React con reescritura a <code>index.html</code>.</dd>
+        <dt>Funciones</dt><dd>Dos Cloud Functions en la misma región para el historial del panel: una consulta BigQuery con búsqueda opcional, otra actualiza la respuesta del experto.</dd>
+        <dt>Entornos</dt><dd>El fichero de build está parametrizado por nombre de servicio y alias de proyecto, con producción como valor por defecto y <code>-dev</code> como sufijo del entorno de desarrollo, que es el que está en uso.</dd>
+      </dl>
+    </section>
+
+    <!-- ================= 11 ================= -->
+    <section id="s11">
+      <div class="sec-head"><span class="sec-num">11</span><h2>Calidad y evaluación</h2></div>
+
+      <p>Hasta ahora la calidad del sistema se juzgaba leyendo respuestas. Existe ya una medición reproducible: un conjunto de preguntas con su respuesta correcta y las fuentes donde está, contra el que se puede comparar cualquier cambio de arquitectura.</p>
+
+      <div class="scroll">
+        <table>
+          <thead><tr><th>Métrica</th><th>Qué mide</th><th class="num">Línea base</th></tr></thead>
+          <tbody>
+            <tr><td class="mono">hit@k</td><td>Al menos una fuente correcta entre las recuperadas</td><td class="num">0,80</td></tr>
+            <tr><td class="mono">recall@k</td><td>Proporción de fuentes correctas recuperadas</td><td class="num">0,65</td></tr>
+            <tr><td class="mono">precision@k</td><td>Proporción de lo recuperado que es relevante</td><td class="num">0,42</td></tr>
+            <tr><td class="mono">MRR</td><td>Posición de la primera fuente correcta</td><td class="num">0,51</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <p>La línea base se midió sobre el índice de producción con diez preguntas de arranque. Las preguntas conceptuales son con diferencia las peores: aciertan en la mitad de los casos. El conjunto debe crecer hasta unas cincuenta preguntas redactadas por juristas del instituto colaborador, con doble anotación independiente y acuerdo medido entre anotadores; ese trabajo tiene su propio plan de ocho semanas.</p>
+
+      <p>Además de las métricas de recuperación, el harness puede generar la respuesta y puntuarla con un modelo juez en tres ejes: si se apoya solo en lo recuperado, si coincide con la respuesta de referencia y si las citas apuntan a las fuentes esperadas.</p>
+    </section>
+
+    <!-- ================= 12 ================= -->
+    <section id="s12">
+      <div class="sec-head"><span class="sec-num">12</span><h2>Deuda técnica</h2></div>
+
+      <p>Lo que sigue son problemas reales encontrados al leer el código, ordenados por severidad. Ninguno es hipotético.</p>
+
+      <div class="debt">
+        <div class="debt-item"><div class="sev sev-hi"></div><div class="debt-body">
+          <b>Las reglas de Firestore permiten todo a todo el mundo</b>
+          <p>El fichero de reglas concede lectura y escritura sin condición, con un comentario que indica que era para pruebas locales. Si está publicado, expone conversaciones, progreso de auditorías y metadatos de documentos.</p>
+          <span class="debt-meta">firestore.rules · comprobar primero qué reglas hay publicadas en el proyecto</span>
+        </div></div>
+
+        <div class="debt-item"><div class="sev sev-hi"></div><div class="debt-body">
+          <b>El endpoint de ingesta al corpus no exige administrador</b>
+          <p>Está bajo el prefijo <code>/admin/</code> y tiene su límite de tasa, pero valida con la comprobación de usuario corriente en vez de la de administrador. Cualquier cuenta verificada puede inyectar texto en la base documental común.</p>
+          <span class="debt-meta">app.py · /admin/ingest_document</span>
+        </div></div>
+
+        <div class="debt-item"><div class="sev sev-md"></div><div class="debt-body">
+          <b>El corpus está troceado por bloques de maquetación</b>
+          <p>Mediana de dos palabras por vector. Explica buena parte de la distancia entre acertar el documento (0,80) y acertar documento y página (0,65). El pipeline de sustitución ya está escrito y probado, pero el corpus no se ha reindexado.</p>
+          <span class="debt-meta">índice uclm-corpus-roma · corpus_pipeline.py listo para ejecutar</span>
+        </div></div>
+
+        <div class="debt-item"><div class="sev sev-md"></div><div class="debt-body">
+          <b>Modelo de embeddings en inglés sobre corpus en español</b>
+          <p><code>all-MiniLM-L6-v2</code> se eligió en el primer montaje y no puede cambiarse sin reindexar. Cuantificar cuánto cuesta esa elección es una de las hipótesis de la línea de investigación.</p>
+          <span class="debt-meta">src/config.py · EMBEDDING_MODEL_NAME</span>
+        </div></div>
+
+        <div class="debt-item"><div class="sev sev-md"></div><div class="debt-body">
+          <b>Los PDF del usuario pierden el número de página</b>
+          <p>El troceado aplana todas las páginas antes de partir en ventanas fijas, así que los fragmentos no llevan página y la cita solo puede referirse al documento entero.</p>
+          <span class="debt-meta">src/rag_service.py · extract_pdf_chunks</span>
+        </div></div>
+
+        <div class="debt-item"><div class="sev sev-md"></div><div class="debt-body">
+          <b>El widget desplegado es anterior al del repositorio</b>
+          <p>La corrección que hace visible el fallo de inicio de sesión cuando un bloqueador impide cargar Firebase está en el código pero no en el sitio publicado.</p>
+          <span class="debt-meta">public/chatbot/bubble-prod-script.js</span>
+        </div></div>
+
+        <div class="debt-item"><div class="sev sev-lo"></div><div class="debt-body">
+          <b>El README describe una arquitectura que ya no existe</b>
+          <p>Habla de OpenAI Assistants y de un orquestador con el SDK de agentes. El sistema usa Gemini con llamadas a herramientas desde hace meses. Es lo primero que lee quien llega nuevo.</p>
+          <span class="debt-meta">README.md</span>
+        </div></div>
+
+        <div class="debt-item"><div class="sev sev-lo"></div><div class="debt-body">
+          <b>Lista de administradores escrita en el código</b>
+          <p>Añadir o quitar un administrador exige modificar el fuente y volver a desplegar. Debería ser una reclamación personalizada de Firebase o una variable de entorno.</p>
+          <span class="debt-meta">app.py · _ADMIN_EMAILS</span>
+        </div></div>
+
+        <div class="debt-item"><div class="sev sev-lo"></div><div class="debt-body">
+          <b>FAISS sigue inicializándose sin usarse apenas</b>
+          <p>Los documentos subidos van a Pinecone desde que se hicieron permanentes, pero el almacén en memoria se sigue creando al arrancar y se consulta en cada búsqueda. Ocupa memoria y complica el flujo.</p>
+          <span class="debt-meta">src/local_vector_store.py · src/context_orchestrator.py</span>
+        </div></div>
+
+        <div class="debt-item"><div class="sev sev-lo"></div><div class="debt-body">
+          <b>Orden de decoradores del limitador sin verificar</b>
+          <p>El límite se declara encima de la ruta, no debajo. La librería registra los límites por nombre de función, así que probablemente se aplican, pero conviene comprobarlo con una prueba antes que asumirlo.</p>
+          <span class="debt-meta">app.py · todos los endpoints con @limiter.limit</span>
+        </div></div>
+
+        <div class="debt-item"><div class="sev sev-lo"></div><div class="debt-body">
+          <b>Ficheros de trabajo en la raíz del repositorio</b>
+          <p><code>firestore-debug.log</code>, <code>bubble_tmp.bin</code>, <code>temp.js</code> y scripts de prueba sueltos conviven con el código de producción.</p>
+          <span class="debt-meta">raíz del repositorio</span>
+        </div></div>
+      </div>
+
+      <div class="panel panel-note">
+        <span class="panel-label">Orden sugerido</span>
+        <p>Primero las dos entradas de severidad alta, que son de seguridad y se arreglan en minutos. Después el reindexado del corpus con el pipeline nuevo, midiendo antes y después con el benchmark: es el cambio con mayor efecto sobre la calidad percibida de las respuestas.</p>
+      </div>
+    </section>
+
+    <footer>
+      Documentación generada a partir del código de la rama de trabajo el 19 de septiembre de 2026. Las cifras del corpus y de la línea base proceden de mediciones sobre el índice de producción, no de estimaciones. La especificación equivalente en formato legible por máquina, para desarrollo dirigido por especificación, está en <code>docs/SPEC.md</code>.
+    </footer>
+
+  </main>
+</div>
