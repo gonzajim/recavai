@@ -15,3 +15,9 @@ benchmarks/run_*.jsonl
 
 # resultados de experimentos (se regeneran)
 results/
+
+# ficheros de trabajo que no deben volver al repo
+bubble_tmp.bin
+temp.js
+firestore-debug.log
+*.ps1

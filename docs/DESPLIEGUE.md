@@ -11,7 +11,38 @@ Estado comprobado el 19 de septiembre de 2026 contra la infraestructura real.
 
 Conviene decirlo sin rodeos: **hoy no hay dos entornos, hay uno**. Lo que se llama «desarrollo» es el sistema en producción. Cualquier despliegue afecta a usuarios reales, y por eso el procedimiento por defecto es un despliegue canario.
 
-En `recava-auditor-dev` conviven tres servicios Cloud Run con nombres parecidos. El que sirve el tráfico es **`orchestrator-dev`** (URL `https://orchestrator-dev-370417116045.europe-west1.run.app`, la que tiene cableada el panel de administración). Los otros dos —`orchestrator` y `orchestrator-dev-370417116045`— son restos de despliegues antiguos y no reciben tráfico; conviene borrarlos algún día para no desplegar sobre el equivocado por error.
+En `recava-auditor-dev` el único servicio del orquestador es **`orchestrator-dev`**, con dos URL equivalentes: `https://orchestrator-dev-370417116045.europe-west1.run.app` (formato nuevo, la que tienen cableada los frontales) y `https://orchestrator-dev-ks5tq3h2xq-ew.a.run.app` (formato antiguo). Los otros dos servicios de Cloud Run que aparecen ahí, `getchathistory` y `updateexpertresponse`, son las Cloud Functions de `functions/index.js`.
+
+## 1.1 Convención de nombres
+
+Cloud Run publica cada servicio en dos URL, y una de ellas incluye el número de proyecto:
+
+```
+https://{servicio}-{número-de-proyecto}.{región}.run.app     ← formato nuevo
+https://{servicio}-{hash}-{región}.a.run.app                 ← formato antiguo
+```
+
+De ahí salió la confusión que se limpió el 19 de septiembre de 2026: alguien creó servicios **cuyo nombre era una URL copiada**, de modo que `orchestrator-dev-370417116045` parecía el servicio real cuando en realidad el real era `orchestrator-dev` y aquello era un duplicado vacío.
+
+Reglas para no repetirlo:
+
+- El nombre del servicio lleva **siempre** el sufijo del entorno y **nunca** el número de proyecto: `orchestrator-dev`, `orchestrator-prod`. Un `orchestrator` a secas es ambiguo y está prohibido.
+- Al copiar una URL para configurar un frontal, se copia como URL, jamás como nombre de servicio.
+- Antes de desplegar, `./scripts/deploy.sh status ENTORNO` dice qué servicio y qué revisión se van a tocar.
+
+## 1.2 Qué se retiró en la limpieza del 19/09/2026
+
+| Recurso | Por qué |
+|---|---|
+| Cloud Run `orchestrator-dev-370417116045` (dev) | Duplicado por nombre copiado de una URL. Revisión única de mayo de 2026, sin referencias en el código |
+| Cloud Run `orchestrator` (dev) | Fósil anterior a la migración a Gemini: montaba `OPENAI_API_KEY`, política IAM vacía, respondía 403 |
+| Secretos `OPENAI_API_KEY`, `ASISTENTE_ID`, `AUDITOR_ID`, `ORCHESTRATOR_ASSISTANT_ID` | De la etapa con OpenAI Assistants. Ningún módulo del código los lee |
+| 9 ramas remotas | `agent-builder` `c082b71`, `antigravity` `8aef5f2`, `auditorv2` `cca3f1c`, `dev-audit-progress` `8003494`, `dev-email` `e4e05b5`, `dev-historic` `ea9812c`, `dev-stable` `cae064e`, `fix/options-500` `9026010`, `dev-gemini-migration` `d230891`. Recuperables con `git push origin SHA:refs/heads/NOMBRE` |
+| `temp.js`, `bubble_tmp.bin`, `firestore-debug.log`, `test.orchestrator.http`, `test_api.ps1` | Ficheros de trabajo en la raíz del repositorio. Siguen en el historial de git |
+
+Borrar `OPENAI_API_KEY` de Secret Manager **no revoca la clave en OpenAI**. Si sigue activa, hay que revocarla en `platform.openai.com`.
+
+El proyecto `recava-auditor-prod` conserva dos servicios muertos (`orchestrator-520199812528` y `recava-auditor-prod`) que no se pudieron tocar porque el proyecto no tiene facturación habilitada. Habrá que borrarlos al activarlo.
 
 ## 2. Procedimiento normal
 
@@ -51,7 +82,7 @@ Si se publicase el frontend a la vez que se despliega la revisión canaria, el 1
 2. Crear los secretos: `GEMINI_API_KEY`, `PINECONE_API_KEY`, `PINECONE_INDEX_NAME`, `BIGQUERY_DATASET_ID`, `BIGQUERY_TABLE_ID`, `NEO4J_PASSWORD`.
 3. Crear el índice de Pinecone de producción e indexarlo con `src/corpus_pipeline.py` — o decidir explícitamente que ambos entornos comparten índice.
 4. Crear el dataset y la tabla de BigQuery.
-5. Crear los sitios de Firebase Hosting y corregir el alias: `.firebaserc` apuntaba el alias `prod` al proyecto `recava-auditor`, **que no existe**; ahora apunta a `recava-auditor-prod`.
+5. Crear el servicio Cloud Run `orchestrator-prod` y los sitios de Firebase Hosting, y corregir el alias: `.firebaserc` apuntaba el alias `prod` al proyecto `recava-auditor`, **que no existe**; ahora apunta a `recava-auditor-prod`.
 6. Configurar Firebase Authentication con su propio conjunto de usuarios.
 7. Añadir los orígenes de producción a `CORS_ORIGINS`.
 8. Revisar `firestore.rules`: las reglas actuales conceden lectura y escritura a cualquiera (ver `DEBT-1` en `SPEC.md`). No deben llegar a producción tal cual.

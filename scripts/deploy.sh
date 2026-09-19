@@ -25,7 +25,7 @@ case "$ENVIRONMENT" in
     ;;
   prod)
     PROJECT="recava-auditor-prod"
-    SERVICE="orchestrator"
+    SERVICE="orchestrator-prod"      # nunca "orchestrator" a secas: ver convención en docs/DESPLIEGUE.md
     FIREBASE_ALIAS="prod"
     echo "AVISO: a 2026-09-19 el proyecto $PROJECT NO tiene facturación habilitada,"
     echo "       no tiene Secret Manager y no hay índice de Pinecone propio."
