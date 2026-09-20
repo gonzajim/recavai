@@ -443,105 +443,113 @@ document.addEventListener('DOMContentLoaded', function () {
     const selectionContainer = document.createElement('section');
     selectionContainer.className = 'selection-container';
 
-    // Fila 1: bienvenida
-    const welcome = document.createElement('div');
-    welcome.className = 'welcome-banner';
+    // Fila 1: hero — un momento de llegada con identidad propia, antes de pedir
+    // ninguna decisión. El saludo con nombre pasa a ser la línea secundaria.
+    const hero = document.createElement('div');
+    hero.className = 'hero-band';
     const displayName = (currentUser.displayName || currentUser.email || '').split('@')[0] || 'usuario';
-    welcome.innerHTML =
-      `¡Hola, <strong>${displayName}</strong>! Somos tus auditores legales especializados en Diligencia Debida en materia de Sostenibilidad.<br/>
-       <strong>Elige el modo en el que quieres interactuar:</strong>`;
-    selectionContainer.appendChild(welcome);
+    hero.innerHTML = `
+      <p class="hero-eyebrow">Observatorio RECAVA</p>
+      <h2 class="hero-h">Sostenibilidad y diligencia debida, sin ambigüedad</h2>
+      <p class="hero-dek">Dos modos sobre el mismo corpus normativo — CSDDD, CSRD, GRI, EUDR —: asesoría inmediata o una auditoría estructurada con hallazgos clasificados.</p>
+      <p class="hero-greet">Hola, <b>${escapeHtml(displayName)}</b> — esto es lo que puedes hacer ahora:</p>`;
+    selectionContainer.appendChild(hero);
 
     renderConversationHistorySection(selectionContainer);
 
     // Fila 2: tarjetas
     const grid = document.createElement('div');
     grid.className = 'mode-grid';
+    // Icono de "check" para los bullets de "Qué sí hace" y chevron del <details> "Ver más".
+    const _bulletCheck = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M5 13l4 4L19 7"/></svg>';
+    const _moreChev = '<svg class="mode-more__chev" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M9 6l6 6-6 6"/></svg>';
+
     grid.innerHTML = `
       <article class="mode-card mode-card--advisor">
-        <header class="mode-card__header">Modo Asesor (Cumplimiento en sostenibilidad)</header>
+        <div class="mode-card__head">
+          <span class="mode-card__icon">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M15.5 8.5l-2.2 5.8-5.8 2.2 2.2-5.8z"/></svg>
+          </span>
+          <div class="mode-card__titles">
+            <span class="mode-card__kicker">Cumplimiento en sostenibilidad</span>
+            <p class="mode-card__title">Modo Asesor</p>
+          </div>
+        </div>
+
+        <p class="mode-card__summary">Te ayuda a implantar políticas, priorizar riesgos y traducir la CSDDD en procedimientos y KPIs operativos.</p>
+
+        <ul class="mode-card__bullets">
+          <li>${_bulletCheck}Traduce requisitos legales en procedimientos, cláusulas, checklists y KPIs operativos.</li>
+          <li>${_bulletCheck}Orienta la implementación: gobernanza, matriz de riesgos, canales, auditorías internas, evidencias.</li>
+          <li>${_bulletCheck}Señala qué datos/evidencias generan insumos útiles para CSRD/GRI sin elaborar la memoria.</li>
+        </ul>
+
         <div class="mode-card__footer">
           <button class="mode-button-chat" data-mode="advisor" title="Seleccionar modo asesor" role="button">
             Seleccionar Modo Asesor
           </button>
         </div>
-        <div class="mode-card__body">
-          <p class="mode-card__text">
-            En Modo Asesor, el asistente actúa como experto en diligencia debida y cumplimiento normativo en sostenibilidad,
-            alineado con la CSDDD y normativa conexa (p. ej., EUDR, canales de alerta, PRL, etc.).
-            Su función es ayudar a implantar políticas y códigos, analizar y priorizar riesgos, diseñar controles y trazabilidad,
-            definir medidas correctoras y remediación, y operativizar los requisitos con estándares (OCDE, OIT, ISO).
-          </p>
-          <div class="mode-card__text">
-            <strong>Qué sí hace</strong>
-            <ul class="mode-card__text">
-              <li>Traducir requisitos legales en procedimientos, cláusulas, checklists y KPIs operativos.</li>
-              <li>Orientar sobre cómo implementar las medidas de diligencia debida (gobernanza, matriz de riesgos, canales, auditorías internas, evidencias).</li>
-              <li>Señalar qué datos/evidencias generan insumos útiles para CSRD/GRI sin elaborar la memoria.</li>
-            </ul>
+
+        <details class="mode-more">
+          <summary>${_moreChev}Ver descripción completa y qué no hace</summary>
+          <div class="mode-more__body">
+            <p>En Modo Asesor, el asistente actúa como experto en diligencia debida y cumplimiento normativo en sostenibilidad,
+              alineado con la CSDDD y normativa conexa (p. ej., EUDR, canales de alerta, PRL, etc.).
+              Su función es ayudar a implantar políticas y códigos, analizar y priorizar riesgos, diseñar controles y trazabilidad,
+              definir medidas correctoras y remediación, y operativizar los requisitos con estándares (OCDE, OIT, ISO).</p>
+            <p><strong>Qué no hace:</strong> No redacta ni cierra el informe de sostenibilidad bajo CSRD ni sustituye verificaciones externas.</p>
+            <p>Las respuestas se basan en fuentes normativas verificadas (UE/BOE/autoridades), estándares reconocidos (ISO/OCDE/OIT/GRI)
+              y el corpus metodológico RECAVA, por lo que resultan idóneas para consultas técnicas y operativas sin intervención humana directa.</p>
           </div>
-          <div class="mode-card__text">
-            <strong>Qué no hace</strong>
-            <ul class="mode-card__text">
-              <li>No redacta ni cierra el informe de sostenibilidad bajo CSRD ni sustituye verificaciones externas.</li>
-            </ul>
-          </div>
-          <p class="mode-card__text">
-            Las respuestas se basan en fuentes normativas verificadas (UE/BOE/autoridades), estándares reconocidos (ISO/OCDE/OIT/GRI)
-            y el corpus metodológico RECAVA, por lo que resultan idóneas para consultas técnicas y operativas sin intervención humana directa.
-          </p>
-        </div>
+        </details>
       </article>
 
       <article class="mode-card mode-card--auditor">
-        <header class="mode-card__header">Modo Auditor (Cumplimiento en sostenibilidad)</header>
+        <div class="mode-card__head">
+          <span class="mode-card__icon">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2"/><rect x="9" y="3" width="6" height="4" rx="1"/><path d="M9 12.5l2 2 4-4.5"/></svg>
+          </span>
+          <div class="mode-card__titles">
+            <span class="mode-card__kicker">Cumplimiento en sostenibilidad</span>
+            <p class="mode-card__title">Modo Auditor</p>
+          </div>
+        </div>
+
+        <p class="mode-card__summary">Revisa tu sistema frente a la CSDDD en bloques estructurados y devuelve hallazgos clasificados con plan de acción.</p>
+
+        <ul class="mode-card__bullets">
+          <li>${_bulletCheck}Evalúa conformidad de tu sistema (políticas/códigos, análisis de riesgos, trazabilidad, remediación) frente a requisitos legales y estándares operativos (ISO/OCDE/OIT/GRI).</li>
+          <li>${_bulletCheck}Pide y analiza muestras documentales (p. ej., matrices de riesgo, cláusulas a proveedores, registros de formación/SST, geolocalización EUDR).</li>
+          <li>${_bulletCheck}Emite hallazgos clasificados (Crítico/Alto/Medio), con medidas, evidencias y prioridad.</li>
+        </ul>
+
         <div class="mode-card__footer">
           <button class="mode-button-chat" data-mode="auditor" title="Seleccionar modo auditor" role="button">
             Seleccionar Modo Auditor
           </button>
         </div>
-        <div class="mode-card__body">
-          <p class="mode-card__text">
-            En Modo Auditor, el asistente actúa como auditor digital de cumplimiento: revisa políticas, procedimientos y evidencias,
-            detecta brechas frente a la CSDDD y normas relacionadas (p. ej., EUDR, canales de alerta, PRL), solicita información adicional cuando falta
-            y devuelve un plan de acciones correctivas con responsables, plazos y evidencias mínimas.
-          </p>
-          <div class="mode-card__text">
-            <strong>Qué sí hace</strong>
-            <ul class="mode-card__text">
-              <li>Evalúa conformidad de tu sistema (políticas/códigos, análisis de riesgos, trazabilidad, remediación) frente a requisitos legales y estándares operativos (ISO/OCDE/OIT/GRI).</li>
-              <li>Pide y analiza muestras documentales (p. ej., matrices de riesgo, cláusulas a proveedores, registros de formación/SST, geolocalización EUDR).</li>
-              <li>Emite hallazgos clasificados (Crítico/Alto/Medio), con medidas, evidencias y prioridad.</li>
-            </ul>
+
+        <details class="mode-more">
+          <summary>${_moreChev}Ver descripción completa, qué no hace y módulos del proceso</summary>
+          <div class="mode-more__body">
+            <p>En Modo Auditor, el asistente actúa como auditor digital de cumplimiento: revisa políticas, procedimientos y evidencias,
+              detecta brechas frente a la CSDDD y normas relacionadas (p. ej., EUDR, canales de alerta, PRL), solicita información adicional cuando falta
+              y devuelve un plan de acciones correctivas con responsables, plazos y evidencias mínimas.</p>
+            <p><strong>Qué no hace:</strong> No sustituye auditorías de tercera parte ni inspecciones oficiales, ni emite certificaciones.
+              No redacta ni valida el informe CSRD; solo indica qué datos/evidencias del cumplimiento alimentan ese reporte.</p>
+            <p>Las respuestas se basan en fuentes normativas verificadas (UE/BOE/autoridades), estándares reconocidos (ISO/OCDE/OIT/GRI)
+              y el corpus metodológico RECAVA, por lo que resultan idóneas para conocer tu grado de cumplimiento o el de tus proveedores.</p>
+            <div class="mode-card__modules">
+              <div class="mode-card__modules-title">Módulos del proceso</div>
+              <div class="mode-chips">
+                <span>Análisis de Riesgos</span><span>Políticas y Códigos en DDHH</span><span>Sistema de Gestión de Riesgos</span>
+                <span>Transparencia y Publicidad</span><span>Informe de Sostenibilidad</span><span>Reparación de Daños</span>
+                <span>Condiciones de Trabajo Dignas</span><span>Seguridad y Salud Laboral</span><span>Trabajo Forzado</span>
+                <span>Trabajo Infantil</span><span>Medioambiente y Cambio Climático</span>
+              </div>
+            </div>
           </div>
-          <div class="mode-card__text">
-            <strong>Qué no hace</strong>
-            <ul class="mode-card__text">
-              <li>No sustituye auditorías de tercera parte ni inspecciones oficiales, ni emite certificaciones.</li>
-              <li>No redacta ni valida el informe CSRD; solo indica qué datos/evidencias del cumplimiento alimentan ese reporte.</li>
-            </ul>
-          </div>
-          <p class="mode-card__text">
-            Las respuestas se basan en fuentes normativas verificadas (UE/BOE/autoridades), estándares reconocidos (ISO/OCDE/OIT/GRI)
-            y el corpus metodológico RECAVA, por lo que resultan idóneas para conocer tu grado de cumplimiento o el de tus proveedores.
-          </p>
-          <div class="mode-card__modules">
-            <div class="mode-card__modules-title">Módulos del proceso</div>
-            <ul class="mode-card__modules-list">
-              <li>Análisis de Riesgos</li>
-              <li>Políticas y Códigos en DDHH</li>
-              <li>Sistema de Gestión de Riesgos</li>
-              <li>Transparencia y Publicidad</li>
-              <li>Informe de Sostenibilidad</li>
-              <li>Reparación de Daños</li>
-              <li>Condiciones de Trabajo Dignas</li>
-              <li>Seguridad y Salud Laboral</li>
-              <li>Trabajo Forzado</li>
-              <li>Trabajo Infantil</li>
-              <li>Medioambiente y Cambio Climático</li>
-            </ul>
-          </div>
-        </div>
+        </details>
       </article>`;
     selectionContainer.appendChild(grid);
 
@@ -563,31 +571,23 @@ document.addEventListener('DOMContentLoaded', function () {
     if (!parentEl) return;
     historySectionState = null;
 
-    const section = document.createElement('section');
-    section.className = 'history-section';
+    // Franja compacta, no una tarjeta del tamaño de la decisión principal: si no hay
+    // nada que continuar, se oculta entera en vez de decir "no tienes conversaciones".
+    const section = document.createElement('div');
+    section.className = 'history-strip';
 
-    const header = document.createElement('header');
-    header.className = 'history-header';
-
-    const title = document.createElement('h2');
-    title.className = 'history-title';
-    title.textContent = 'Tus últimas conversaciones';
-
-    const subtitle = document.createElement('p');
-    subtitle.className = 'history-subtitle';
-    subtitle.textContent = 'Pulsa sobre una para reanudarla.';
-
-    header.appendChild(title);
-    header.appendChild(subtitle);
-    section.appendChild(header);
+    const label = document.createElement('span');
+    label.className = 'history-strip__label';
+    label.textContent = 'Continuar';
+    section.appendChild(label);
 
     const listEl = document.createElement('ul');
-    listEl.className = 'history-list';
+    listEl.className = 'history-strip__list';
     section.appendChild(listEl);
 
-    const statusEl = document.createElement('p');
-    statusEl.className = 'history-status';
-    statusEl.textContent = 'Cargando conversaciones...';
+    const statusEl = document.createElement('span');
+    statusEl.className = 'history-strip__status';
+    statusEl.textContent = 'Cargando conversaciones…';
     section.appendChild(statusEl);
 
     parentEl.appendChild(section);
@@ -601,7 +601,9 @@ document.addEventListener('DOMContentLoaded', function () {
       })
       .catch((error) => {
         console.error('No se pudo cargar el historial:', error);
-        setHistoryStatusMessage('No se pudo cargar el historial. Intentalo mas tarde.', true);
+        section.hidden = false;
+        listEl.innerHTML = '';
+        setHistoryStatusMessage('No se pudo cargar el historial. Inténtalo más tarde.', true);
       });
   }
 
@@ -615,46 +617,45 @@ document.addEventListener('DOMContentLoaded', function () {
       return;
     }
     statusEl.textContent = message;
-    statusEl.style.display = 'block';
+    statusEl.style.display = 'inline';
     statusEl.classList.toggle('is-error', !!isError);
   }
 
   function updateHistoryList(conversations) {
     if (!historySectionState?.listEl) return;
-    const { listEl } = historySectionState;
+    const { listEl, section } = historySectionState;
     listEl.innerHTML = '';
 
     if (!conversations || !conversations.length) {
-      setHistoryStatusMessage('Todavia no tienes conversaciones previas.', false);
+      // Nada que continuar: la franja no aporta nada, así que no ocupa espacio.
+      section.hidden = true;
       return;
     }
 
+    section.hidden = false;
     setHistoryStatusMessage('', false);
 
     conversations.forEach((conversation) => {
       const item = document.createElement('li');
-      item.className = 'history-item';
+      item.className = 'history-chip';
 
       const link = document.createElement('a');
       link.href = '#';
-      link.className = 'history-link';
+      link.className = 'history-chip__link';
       link.dataset.threadId = conversation.thread_id;
       if (conversation.endpoint_source) {
         link.dataset.endpointSource = conversation.endpoint_source;
       }
-      link.textContent = conversation.summary || 'Conversacion previa';
+
+      const modeLabel = (conversation.endpoint_source || '').includes('auditor') ? 'Auditor' : 'Asesor';
+      const summaryText = conversation.summary || 'Conversación previa';
+      const metaText = formatHistoryTimestamp(conversation.last_timestamp);
+      link.innerHTML =
+        `<b>${escapeHtml(modeLabel)}</b><span class="history-chip__summary">${escapeHtml(summaryText)}</span>`
+        + (metaText ? `<time>${escapeHtml(metaText)}</time>` : '');
       link.addEventListener('click', handleHistoryItemClick);
 
       item.appendChild(link);
-
-      const metaText = formatHistoryTimestamp(conversation.last_timestamp);
-      if (metaText) {
-        const meta = document.createElement('span');
-        meta.className = 'history-meta';
-        meta.textContent = metaText;
-        item.appendChild(meta);
-      }
-
       listEl.appendChild(item);
 
       const existing = conversationThreadCache.get(conversation.thread_id) || {};
@@ -934,6 +935,8 @@ document.addEventListener('DOMContentLoaded', function () {
       answered_count: 0,
       mandatory_count: 0,
       pending_questions: [],
+      answered_questions: [],
+      findings: [],
       deferred_reason: null,
       completed_at: null,
       updated_at: null,
@@ -967,6 +970,8 @@ document.addEventListener('DOMContentLoaded', function () {
         answered_count: Number.isFinite(info.answered_count) ? info.answered_count : 0,
         mandatory_count: Number.isFinite(info.mandatory_count) ? info.mandatory_count : 0,
         pending_questions: Array.isArray(info.pending_questions) ? info.pending_questions : [],
+        answered_questions: Array.isArray(info.answered_questions) ? info.answered_questions : [],
+        findings: Array.isArray(info.findings) ? info.findings : [],
         deferred_reason: info.deferred_reason || null,
         completed_at: info.completed_at || null,
         updated_at: info.updated_at || null,
@@ -1091,20 +1096,47 @@ document.addEventListener('DOMContentLoaded', function () {
     if (!auditRightPanelEl) return;
     const state = auditProgressState || buildDefaultAuditProgressState();
 
-    // Informe tab
+    // Informe tab — se lee como un documento que crece: un bloque plegable por cada
+    // bloque cerrado, más el activo "en curso" con lo registrado hasta ahora. Antes solo
+    // mostraba el último bloque cerrado y dejaba caer los hallazgos (findings) del activo.
     const reportPane = auditRightPanelEl.querySelector('[data-pane="report"]');
     if (reportPane) {
-      const completed = (state.blocks || []).filter(b => b.status === 'completed' && b.summary && b.summary.trim());
-      if (!completed.length) {
-        reportPane.innerHTML = '<p class="audit-panel-empty">Los hallazgos aparecerán aquí conforme se completen los bloques.</p>';
-      } else {
-        reportPane.innerHTML = completed.map(b =>
-          `<div class="audit-report-blk">
-            <p class="audit-report-blk__title">${escapeHtml(b.label || b.id)}</p>
-            <p class="audit-report-blk__text">${escapeHtml(b.summary.trim())}</p>
-          </div>`
-        ).join('');
+      const blocks = state.blocks || [];
+      const closed = blocks.filter(b => b.status === 'completed' && b.summary && b.summary.trim());
+      const activeBlock = blocks.find(b => b.id === state.active_block_id && b.status !== 'completed');
+
+      const entries = [];
+      closed.forEach(b => entries.push(
+        `<details class="audit-report-blk" open>
+          <summary class="audit-report-blk__hdr">
+            <span class="audit-report-blk__chev">▶</span>
+            <span class="audit-report-blk__title">${escapeHtml(b.label || b.id)}</span>
+            <span class="audit-report-blk__status audit-report-blk__status--closed">Cerrado</span>
+          </summary>
+          <p class="audit-report-blk__text">${escapeHtml(b.summary.trim())}</p>
+        </details>`
+      ));
+      if (activeBlock) {
+        const total = activeBlock.mandatory_count || 0;
+        const done = activeBlock.answered_count || 0;
+        const pct = total ? Math.round((done / total) * 100) : 0;
+        entries.push(
+          `<details class="audit-report-blk" open>
+            <summary class="audit-report-blk__hdr">
+              <span class="audit-report-blk__chev">▶</span>
+              <span class="audit-report-blk__title">${escapeHtml(activeBlock.label || activeBlock.id)}</span>
+              <span class="audit-report-blk__status audit-report-blk__status--progress">En curso</span>
+            </summary>
+            <p class="audit-report-blk__text audit-report-blk__text--muted">${done} de ${total} preguntas obligatorias registradas.</p>
+            <div class="audit-report-blk__bar"><i style="width:${pct}%"></i></div>
+            ${_renderFindingsBadges(activeBlock.findings)}
+          </details>`
+        );
       }
+
+      reportPane.innerHTML = entries.length
+        ? entries.join('') + `<p class="audit-report-foot">Los bloques siguientes se irán añadiendo aquí a medida que se cierren.</p>`
+        : '<p class="audit-panel-empty">Los hallazgos aparecerán aquí conforme se completen los bloques.</p>';
     }
 
     // Archivos tab — sourced from userFiles (server)
@@ -1119,6 +1151,40 @@ document.addEventListener('DOMContentLoaded', function () {
         });
       }
     }
+  }
+
+  // Iconos del checklist en vivo del bloque activo (respondida / siguiente / en cola).
+  const _checkIconDone = '<svg class="audit-check__icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M5 13l4 4L19 7"/></svg>';
+  const _checkIconCurrent = '<svg class="audit-check__icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><circle cx="12" cy="12" r="4.5"/></svg>';
+  const _checkIconPending = '<svg class="audit-check__icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="8"/></svg>';
+
+  // Mismo vocabulario de veredicto que usa el servidor (ver _VERDICT_RE en gemini_service.py).
+  const VERDICT_META = {
+    'cumple':              { label: 'Cumple',             cls: 'ok' },
+    'cumple parcialmente': { label: 'Cumple parcialmente', cls: 'warn' },
+    'no cumple':           { label: 'No cumple',           cls: 'bad' },
+    'no evaluable':        { label: 'No evaluable',        cls: 'neutral' },
+  };
+
+  // `assessment` es el texto crudo "VEREDICTO: …\nBRECHA: …\nRECOMENDACIÓN: …\nBASE: …"
+  // que guarda el servidor. Aquí solo se extrae la brecha para el resumen visual.
+  function _parseFindingGap(text) {
+    const m = (text || '').match(/BRECHA:\s*([\s\S]*?)(?:\n[A-ZÁÉÍÓÚ]+:|$)/i);
+    return m ? m[1].trim() : '';
+  }
+
+  function _renderFindingsBadges(findings) {
+    const list = (Array.isArray(findings) ? findings : []).filter(f => f && f.verdict);
+    if (!list.length) return '';
+    return '<div class="audit-blk__findings">' + list.slice(-4).map(f => {
+      const meta = VERDICT_META[String(f.verdict).toLowerCase()] || VERDICT_META['no evaluable'];
+      const gap = _parseFindingGap(f.assessment);
+      const gapHtml = (meta.cls !== 'ok' && gap && gap.toLowerCase() !== 'ninguna')
+        ? `<p class="audit-finding__gap">${escapeHtml(gap)}</p>` : '';
+      return `<div class="audit-finding audit-finding--${meta.cls}">
+        <span class="audit-finding__badge">${meta.label}</span>${gapHtml}
+      </div>`;
+    }).join('') + '</div>';
   }
 
   function renderAuditProgressList(state) {
@@ -1165,13 +1231,21 @@ document.addEventListener('DOMContentLoaded', function () {
         const reason = block.deferred_reason ? ` — ${escapeHtml(block.deferred_reason)}` : '';
         bodyContent = `<span class="audit-blk__body-empty">Aplazado${reason}</span>`;
       } else if (isActive || done > 0) {
+        const answeredQ = Array.isArray(block.answered_questions) ? block.answered_questions : [];
         const pend = Array.isArray(block.pending_questions) ? block.pending_questions : [];
-        bodyContent = pend.length
-          ? `<div class="audit-blk__pending"><span class="audit-blk__pending-ttl">Pendientes (${pend.length}):</span><ul>`
-            + pend.slice(0, 8).map(q => `<li>${escapeHtml(q.text || q.id || '')}</li>`).join('')
-            + (pend.length > 8 ? `<li>…y ${pend.length - 8} más</li>` : '')
-            + '</ul></div>'
+        // Checklist en vivo: lo ya registrado (✓), la siguiente pregunta del guion
+        // (● — es la única que el auditor formulará ahora, una por turno) y el resto
+        // en cola (○). Sustituye a la lista plana de "pendientes" de antes.
+        const checkItems = [
+          ...answeredQ.map(q => `<li class="audit-check audit-check--done">${_checkIconDone}${escapeHtml(q.text || q.id || '')}</li>`),
+          ...pend.slice(0, 1).map(q => `<li class="audit-check audit-check--current">${_checkIconCurrent}${escapeHtml(q.text || q.id || '')}</li>`),
+          ...pend.slice(1, 8).map(q => `<li class="audit-check audit-check--pending">${_checkIconPending}${escapeHtml(q.text || q.id || '')}</li>`),
+        ];
+        const moreCount = pend.length > 8 ? pend.length - 8 : 0;
+        bodyContent = checkItems.length
+          ? `<ul class="audit-blk__checklist">${checkItems.join('')}${moreCount ? `<li class="audit-check audit-check--pending">…y ${moreCount} más</li>` : ''}</ul>`
           : '<span class="audit-blk__body-empty">Todas las obligatorias respondidas: listo para cerrar.</span>';
+        bodyContent += _renderFindingsBadges(block.findings);
       } else {
         bodyContent = '<span class="audit-blk__body-empty">Pendiente</span>';
       }
@@ -1506,7 +1580,10 @@ document.addEventListener('DOMContentLoaded', function () {
         currentConversationMessages.pop();
         userInputEl.value = messageText;
         adjustUserInputHeight();
-        addSystemMessageToChat(`Error del servidor: ${err.error || resp.statusText}. Tu mensaje ha sido restaurado.`);
+        addSystemErrorWithRetry(
+          `Error del servidor: ${err.error || resp.statusText}.`,
+          () => handleSendMessageToServer()
+        );
         userInputEl.focus();
         return;
       }
@@ -1532,7 +1609,10 @@ document.addEventListener('DOMContentLoaded', function () {
       currentConversationMessages.pop();
       userInputEl.value = messageText;
       adjustUserInputHeight();
-      addSystemMessageToChat("No se pudo conectar con el servidor. Tu mensaje ha sido restaurado.");
+      addSystemErrorWithRetry(
+        "No se pudo conectar con el servidor.",
+        () => handleSendMessageToServer()
+      );
       console.error("fetch error:", e);
       userInputEl.focus();
     }
@@ -1630,6 +1710,18 @@ document.addEventListener('DOMContentLoaded', function () {
     chatMessagesEl.appendChild(el); scrollChatToBottom();
   }
   function addSystemMessageToChat(t){ const s=t.replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;"); addMessageToChatDOM(s,'system-message'); }
+  // Variante para errores de envío: el texto del usuario ya se restaura en el input
+  // (ver handleSendMessageToServer), así que "reintentar" es simplemente reenviarlo.
+  function addSystemErrorWithRetry(t, onRetry){
+    const s = t.replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;");
+    const el = document.createElement('div');
+    el.classList.add('message', 'system-message', 'system-message--error');
+    el.innerHTML = `<span class="system-message__text">${s}</span>` +
+      `<button type="button" class="system-message__retry">↻ Reintentar</button>`;
+    el.querySelector('.system-message__retry').addEventListener('click', () => { el.remove(); onRetry(); });
+    chatMessagesEl.appendChild(el);
+    scrollChatToBottom();
+  }
   function addAssistantMessageInternal(html){ const el=document.createElement('div'); el.classList.add('message','assistant-message'); el.innerHTML=`<div class="main-assistant-text">${html}</div>`; chatMessagesEl.appendChild(el); scrollChatToBottom(); }
   function escapeHtml(u){ if(!u) return ''; return u.toString().replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/"/g,"&quot;").replace(/'/g,"&#039;"); }
 

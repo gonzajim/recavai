@@ -243,7 +243,11 @@ def chat_with_auditor(
         contents.append(response.candidates[0].content)
         contents.append(types.Content(role="user", parts=function_responses))
 
-    return _extract_text(response)
+    # Red de seguridad: el prompt pide al modelo que nunca muestre el id interno
+    # (block_2_q1...) al usuario, pero el cumplimiento de un LLM es probabilístico.
+    # Si se cuela, lo quitamos aquí antes de que llegue al frontend.
+    text = _extract_text(response)
+    return re.sub(r"\s*\(block_\d+_q\d+\)", "", text)
 
 
 def chat_with_expert(

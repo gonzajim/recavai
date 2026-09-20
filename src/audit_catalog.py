@@ -238,6 +238,17 @@ def missing_mandatory(block_id: str, answered: list[str] | set[str] | None) -> l
     return [q for q in b.mandatory if q.id not in done]
 
 
+def answered_mandatory(block_id: str, answered: list[str] | set[str] | None) -> list[Question]:
+    """Preguntas [M] del bloque ya respondidas, en su orden del catálogo. Complemento de
+    `missing_mandatory` — la usa el frontend para mostrar el enunciado (no solo el id) de
+    lo que ya se registró, sin duplicar el catálogo de preguntas fuera de este módulo."""
+    b = get_block(block_id)
+    if not b:
+        return []
+    done = set(answered or ())
+    return [q for q in b.mandatory if q.id in done]
+
+
 def verifiable(block_id: str, question_ids: list[str] | set[str] | None) -> list[Question]:
     """De los ids dados, los que son evaluables contra normativa (`verify=True`).
     Si la lista sale vacía no se llama al experto: no hay nada que verificar."""

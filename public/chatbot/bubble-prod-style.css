@@ -19,6 +19,29 @@
   --borde-input: #ced4da;
   --borde-input-focus-sombra: rgba(140, 27, 58, 0.2);
   --fuente-principal: 'Inter', -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+
+  /* Código de color de veredicto — el mismo en el checklist del bloque activo, las
+     insignias de hallazgos y el informe. Reutiliza los colores que ya usaba el panel
+     de auditoría para "completado" (verde) y "aplazado" (ámbar); solo añade el rojo de
+     "no cumple" (distinto del rojo de marca, que ya está en uso para el estado activo)
+     y el gris de "no evaluable". */
+  --estado-cumple: #2ecc71;
+  --estado-cumple-fondo: rgba(46, 204, 113, .1);
+  --estado-parcial: #e6a23c;
+  --estado-parcial-fondo: rgba(230, 162, 60, .12);
+  --estado-no-cumple: #d64545;
+  --estado-no-cumple-fondo: rgba(214, 69, 69, .1);
+  --estado-no-evaluable: var(--texto-gris-sutil);
+  --estado-no-evaluable-fondo: rgba(107, 114, 128, .1);
+
+  /* Fondo del hero de la pantalla de inicio (tinte de marca muy suave). */
+  --asesor-fondo-suave: rgba(140, 27, 58, .05);
+
+  /* Acento del Modo Auditor — distinto del rojo de marca (que queda para Asesor),
+     para que ambas tarjetas se distingan de un vistazo sin leer el título. */
+  --auditor-principal: #1f5d57;
+  --auditor-hover: #163f3b;
+  --auditor-fondo-suave: rgba(31, 93, 87, .08);
 }
 
 *, *::before, *::after { box-sizing: border-box; }
@@ -140,6 +163,21 @@ body {
   font-size: .85rem; font-style: italic; text-align: center; align-self: center;
   padding: .25rem .5rem; max-width: 100%; box-shadow: none;
 }
+/* Error de envío: el texto del usuario ya se restauró en el campo de escritura,
+   así que "reintentar" solo tiene que reenviarlo — sin que el usuario tenga que
+   darse cuenta y volver a pulsar enviar por su cuenta. */
+.system-message--error {
+  font-style: normal; display: flex; align-items: center; gap: .6rem;
+  flex-wrap: wrap; justify-content: center;
+  background: rgba(214,69,69,.08); color: #a63333;
+  border-radius: 8px; padding: .5rem .75rem;
+}
+.system-message__retry {
+  border: none; border-radius: 6px; background: rgba(214,69,69,.14); color: #a63333;
+  font-size: .78rem; font-weight: 600; padding: .3rem .65rem; cursor: pointer;
+  transition: background .15s;
+}
+.system-message__retry:hover { background: rgba(214,69,69,.22); }
 
 .assistant-message .main-assistant-text strong,
 .assistant-message .main-assistant-text b { font-weight: 600; color: var(--uclm-rojo-principal); }
@@ -237,24 +275,61 @@ sup.citation-inline:hover { opacity: .75; }
 .mode-card {
   flex: 1 1 320px; background: #ffffff; border: 1px solid var(--borde-general);
   border-radius: 18px; box-shadow: 0 12px 28px rgba(140,27,58,0.08);
-  padding: 1.5rem 1.75rem; display: flex; flex-direction: column; gap: 1rem;
+  padding: 1.4rem 1.6rem 1.5rem; display: flex; flex-direction: column; gap: .9rem;
 }
-.mode-card__header {
-  font-size: 1.2rem; font-weight: 600; color: var(--uclm-rojo-principal); text-align: center;
+.mode-card--auditor { box-shadow: 0 12px 28px rgba(31,93,87,.1); }
+
+/* Icono + título — antes Asesor y Auditor eran el mismo bloque de texto duplicado,
+   sin nada que los distinguiera de un vistazo salvo la palabra del título. */
+.mode-card__head { display: flex; align-items: center; gap: .75rem; }
+.mode-card__icon {
+  width: 42px; height: 42px; border-radius: 12px; flex-shrink: 0;
+  display: flex; align-items: center; justify-content: center;
 }
-.mode-card__body { display: flex; flex-direction: column; gap: .75rem; color: var(--texto-gris-parrafos); font-size: .95rem; line-height: 1.55; }
-.mode-card__text { margin: 0; }
-.mode-card__modules {
-  background: #f5f6f8; border-radius: 12px; padding: .9rem 1rem; border: 1px solid rgba(140,27,58,.12);
+.mode-card__icon svg { width: 22px; height: 22px; }
+.mode-card--advisor .mode-card__icon { background: var(--asesor-fondo-suave); color: var(--uclm-rojo-principal); }
+.mode-card--auditor .mode-card__icon { background: var(--auditor-fondo-suave); color: var(--auditor-principal); }
+.mode-card__titles { display: flex; flex-direction: column; gap: 1px; }
+.mode-card__kicker { font-size: .68rem; font-weight: 700; text-transform: uppercase; letter-spacing: .05em; color: var(--texto-gris-sutil); }
+.mode-card__title { margin: 0; font-size: 1.15rem; font-weight: 700; color: var(--texto-oscuro-principal); }
+
+.mode-card__summary { margin: 0; font-size: .88rem; line-height: 1.5; color: var(--texto-gris-parrafos); }
+
+.mode-card__bullets { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: .45rem; }
+.mode-card__bullets li { display: flex; gap: .5rem; font-size: .85rem; line-height: 1.45; color: var(--texto-oscuro-principal); }
+.mode-card__bullets svg { width: 15px; height: 15px; flex-shrink: 0; margin-top: .2rem; }
+.mode-card--advisor .mode-card__bullets svg { color: var(--uclm-rojo-principal); }
+.mode-card--auditor .mode-card__bullets svg { color: var(--auditor-principal); }
+
+/* El CTA cierra el resumen y los puntos clave — antes iba primero, antes de la
+   única frase que lo justifica. */
+.mode-card__footer { display: flex; justify-content: flex-start; }
+.mode-card--auditor .mode-button-chat { background-color: var(--auditor-principal); }
+.mode-card--auditor .mode-button-chat:hover { background-color: var(--auditor-hover); }
+
+/* "Ver más": qué no hace, la descripción larga y (en Auditor) los módulos del
+   proceso — toda esa información legal sigue ahí, solo que plegada hasta que se pide. */
+.mode-more { margin-top: -.2rem; }
+.mode-more summary {
+  list-style: none; cursor: pointer; display: flex; align-items: center; gap: .35rem;
+  font-size: .8rem; font-weight: 600; color: var(--texto-gris-sutil);
 }
-.mode-card__modules-title { font-weight: 600; color: var(--uclm-rojo-principal); margin-bottom: .35rem; }
-.mode-card__modules-list {
-  list-style: none; padding: 0; margin: 0; display: grid; gap: .35rem; font-size: .9rem; color: var(--texto-gris-sutil);
+.mode-more summary::-webkit-details-marker { display: none; }
+.mode-more__chev { width: 12px; height: 12px; transition: transform .15s ease; flex-shrink: 0; }
+.mode-more[open] .mode-more__chev { transform: rotate(90deg); }
+.mode-more__body {
+  margin-top: .65rem; padding-top: .65rem; border-top: 1px dashed var(--borde-general);
+  display: flex; flex-direction: column; gap: .6rem;
 }
-.mode-card__modules-list li {
-  padding: .35rem .5rem; background: #ffffff; border-radius: 8px; border: 1px solid rgba(140,27,58,.08);
+.mode-more__body p { margin: 0; font-size: .82rem; line-height: 1.55; color: var(--texto-gris-parrafos); }
+
+.mode-card__modules { margin-top: .1rem; }
+.mode-card__modules-title { font-weight: 600; font-size: .82rem; color: var(--texto-oscuro-principal); margin-bottom: .4rem; }
+.mode-chips { display: flex; flex-wrap: wrap; gap: .4rem; }
+.mode-chips span {
+  font-size: .74rem; color: var(--texto-gris-parrafos); background: #f5f6f8;
+  border: 1px solid rgba(140,27,58,.08); border-radius: 999px; padding: .25rem .6rem;
 }
-.mode-card__footer { display: flex; justify-content: center; }
 
 /* Botón de las tarjetas reutiliza .mode-button-chat */
 
@@ -482,83 +557,55 @@ sup.citation-inline:hover { opacity: .75; }
   gap: 1rem;
   padding: 0 1rem 1rem;
 }
-.welcome-banner {
-  background: var(--mensaje-asistente-fondo);
+/* Fila 1: hero — un momento de llegada con identidad de marca, antes de pedir
+   ninguna decisión. Sustituye al antiguo .welcome-banner, que era una tarjeta gris
+   con el mismo peso visual que el resto. */
+.hero-band {
+  background: linear-gradient(180deg, var(--asesor-fondo-suave), var(--fondo-chat) 85%);
   border: 1px solid var(--borde-general);
   border-radius: 12px;
-  padding: 1rem 1.25rem;
-  color: var(--texto-gris-parrafos);
-  box-shadow: 0 1px 2px rgba(0,0,0,0.05);
+  padding: 1.15rem 1.4rem 1rem;
 }
-.history-section {
-  background: #ffffff;
-  border: 1px solid var(--borde-general);
-  border-radius: 12px;
-  padding: 1rem 1.25rem;
-  box-shadow: 0 1px 2px rgba(0,0,0,0.05);
-  display: flex;
-  flex-direction: column;
-  gap: .75rem;
+.hero-eyebrow {
+  font-size: .68rem; font-weight: 700; text-transform: uppercase; letter-spacing: .08em;
+  color: var(--uclm-rojo-principal); margin: 0 0 .3rem;
 }
-.history-header { display: flex; flex-direction: column; gap: .25rem; }
-.history-title {
-  margin: 0;
-  font-size: 1rem;
-  font-weight: 600;
-  color: var(--texto-oscuro-principal);
+.hero-h {
+  font-size: 1.15rem; font-weight: 700; line-height: 1.25;
+  color: var(--texto-oscuro-principal); margin: 0 0 .35rem; max-width: 34ch;
 }
-.history-subtitle {
-  margin: 0;
-  font-size: .85rem;
-  color: var(--texto-gris-sutil);
+.hero-dek { font-size: .88rem; line-height: 1.5; color: var(--texto-gris-parrafos); margin: 0 0 .6rem; max-width: 58ch; }
+.hero-greet { font-size: .8rem; color: var(--texto-gris-sutil); margin: 0; }
+.hero-greet b { color: var(--texto-gris-parrafos); font-weight: 600; }
+
+/* Historial: franja compacta, no una tarjeta del tamaño de la decisión principal.
+   Si no hay nada que continuar (o falla la carga) se resuelve en JS ocultándola —
+   antes ocupaba una tarjeta entera incluso para decir "Cargando conversaciones...". */
+.history-strip {
+  display: flex; align-items: center; gap: .6rem; flex-wrap: wrap;
+  padding: 0 .15rem;
 }
-.history-list {
-  margin: 0;
-  padding: 0;
-  list-style: none;
-  display: flex;
-  flex-direction: column;
-  gap: .5rem;
+.history-strip__label {
+  font-size: .72rem; font-weight: 700; text-transform: uppercase; letter-spacing: .05em;
+  color: var(--texto-gris-sutil); flex-shrink: 0;
 }
-.history-item {
-  display: flex;
-  flex-direction: column;
-  gap: .2rem;
-  padding: .65rem .75rem;
-  border: 1px solid transparent;
-  border-radius: 8px;
-  background-color: #fafafb;
-  transition: border-color .2s ease, background-color .2s ease;
+.history-strip__list {
+  margin: 0; padding: 0; list-style: none; display: flex; gap: .5rem; flex-wrap: wrap; flex: 1;
 }
-.history-item:hover {
-  border-color: rgba(140, 27, 58, .35);
-  background-color: rgba(140, 27, 58, .06);
+.history-chip { display: flex; }
+.history-chip__link {
+  display: inline-flex; align-items: baseline; gap: .35rem; max-width: 260px;
+  background: #fafafb; border: 1px solid var(--borde-general); border-radius: 999px;
+  padding: .3rem .75rem; text-decoration: none; font-size: .78rem;
+  color: var(--texto-gris-parrafos); transition: border-color .15s ease, background-color .15s ease;
 }
-.history-link {
-  color: var(--uclm-rojo-principal);
-  font-weight: 600;
-  text-decoration: none;
-  display: inline-flex;
-  align-items: center;
-  gap: .35rem;
-}
-.history-link:hover { text-decoration: underline; }
-.history-link.is-loading { opacity: .6; pointer-events: none; position: relative; }
-.history-link.is-loading::after {
-  content: '...';
-  font-size: .85rem;
-  color: var(--texto-gris-sutil);
-}
-.history-meta {
-  font-size: .75rem;
-  color: var(--texto-gris-sutil);
-}
-.history-status {
-  margin: 0;
-  font-size: .85rem;
-  color: var(--texto-gris-sutil);
-}
-.history-status.is-error { color: var(--uclm-rojo-principal); }
+.history-chip__link:hover { border-color: rgba(140,27,58,.35); background: rgba(140,27,58,.06); }
+.history-chip__link b { color: var(--uclm-rojo-principal); font-weight: 700; flex-shrink: 0; }
+.history-chip__summary { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.history-chip__link time { font-size: .7rem; color: var(--texto-gris-sutil); flex-shrink: 0; }
+.history-chip__link.is-loading { opacity: .6; pointer-events: none; }
+.history-strip__status { font-size: .78rem; color: var(--texto-gris-sutil); }
+.history-strip__status.is-error { color: var(--uclm-rojo-principal); }
 
 .auditor-progress-panel {
   background: #ffffff;
@@ -879,6 +926,34 @@ sup.citation-inline:hover { opacity: .75; }
 .audit-blk__pending ul { margin: 0; padding-left: 1.05rem; }
 .audit-blk__pending li { margin: .15rem 0; line-height: 1.35; }
 
+/* Checklist en vivo del bloque activo: respondida (✓, atenuada) / siguiente pregunta del
+   guion (●, en negrita — el auditor solo formula esa) / resto en cola (○, atenuada). */
+.audit-blk__checklist { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: .3rem; }
+.audit-check { display: flex; align-items: flex-start; gap: .35rem; line-height: 1.4; }
+.audit-check__icon { width: 13px; height: 13px; flex-shrink: 0; margin-top: .15rem; }
+.audit-check--done { color: var(--texto-gris-sutil); }
+.audit-check--done .audit-check__icon { color: var(--estado-cumple); }
+.audit-check--current { color: var(--texto-oscuro-principal); font-weight: 600; }
+.audit-check--current .audit-check__icon { color: var(--uclm-rojo-principal); }
+.audit-check--pending { color: var(--texto-gris-sutil); }
+.audit-check--pending .audit-check__icon { color: var(--borde-input); }
+
+/* Insignias de veredicto (record_block_answers) bajo el checklist del bloque activo,
+   y dentro del bloque "en curso" del informe. Antes esta información llegaba al
+   navegador pero no se pintaba en ningún sitio. */
+.audit-blk__findings { margin-top: .5rem; display: flex; flex-direction: column; gap: .3rem; }
+.audit-finding { border-left: 3px solid; border-radius: 4px; padding: .3rem .45rem; background: #fff; }
+.audit-finding__badge { font-size: .68rem; font-weight: 700; text-transform: uppercase; letter-spacing: .02em; }
+.audit-finding__gap { margin: .15rem 0 0; font-size: .74rem; color: var(--texto-gris-parrafos); line-height: 1.4; }
+.audit-finding--ok      { border-color: var(--estado-cumple); background: var(--estado-cumple-fondo); }
+.audit-finding--ok      .audit-finding__badge { color: #1f8a4c; }
+.audit-finding--warn    { border-color: var(--estado-parcial); background: var(--estado-parcial-fondo); }
+.audit-finding--warn    .audit-finding__badge { color: #9a6a12; }
+.audit-finding--bad     { border-color: var(--estado-no-cumple); background: var(--estado-no-cumple-fondo); }
+.audit-finding--bad     .audit-finding__badge { color: #a63333; }
+.audit-finding--neutral { border-color: var(--estado-no-evaluable); background: var(--estado-no-evaluable-fondo); }
+.audit-finding--neutral .audit-finding__badge { color: var(--texto-gris-sutil); }
+
 .audit-blk__label {
   font-size: .77rem; font-weight: 600;
   color: var(--texto-oscuro-principal); flex: 1; line-height: 1.25;
@@ -924,14 +999,32 @@ sup.citation-inline:hover { opacity: .75; }
 .audit-tab-pane { display: none; overflow-y: auto; padding: .6rem; flex: 1; }
 .audit-tab-pane.is-active { display: block; }
 
-/* Entradas de informe */
+/* Entradas de informe — un <details> plegable por bloque, para que el informe se lea
+   como un documento que va creciendo en vez de la ficha suelta del último bloque. */
 .audit-report-blk {
-  margin-bottom: .6rem; padding: .5rem .65rem;
-  border: 1px solid rgba(46,204,113,.3); border-radius: 8px;
-  background: rgba(46,204,113,.04);
+  margin-bottom: .5rem; border-radius: 8px; overflow: hidden;
+  border: 1px solid rgba(46,204,113,.3); background: rgba(46,204,113,.04);
 }
-.audit-report-blk__title { font-size: .77rem; font-weight: 700; color: var(--uclm-rojo-principal); margin: 0 0 .2rem; }
-.audit-report-blk__text  { font-size: .77rem; color: var(--texto-gris-parrafos); margin: 0; line-height: 1.5; }
+.audit-report-blk summary { list-style: none; cursor: pointer; }
+.audit-report-blk summary::-webkit-details-marker { display: none; }
+.audit-report-blk__hdr {
+  display: flex; align-items: center; gap: .4rem; padding: .45rem .6rem;
+}
+.audit-report-blk__chev { font-size: .6rem; color: var(--texto-gris-sutil); transition: transform .2s; flex-shrink: 0; }
+.audit-report-blk[open] .audit-report-blk__chev { transform: rotate(90deg); }
+.audit-report-blk__title { font-size: .77rem; font-weight: 700; color: var(--uclm-rojo-principal); flex: 1; line-height: 1.3; }
+.audit-report-blk__status {
+  font-size: .64rem; font-weight: 700; text-transform: uppercase; letter-spacing: .02em;
+  padding: .1rem .4rem; border-radius: 10px; flex-shrink: 0;
+}
+.audit-report-blk__status--closed   { background: var(--estado-cumple-fondo); color: #1f8a4c; }
+.audit-report-blk__status--progress { background: rgba(140,27,58,.1); color: var(--uclm-rojo-principal); }
+.audit-report-blk__text  { font-size: .77rem; color: var(--texto-gris-parrafos); margin: 0 .6rem .5rem; line-height: 1.5; }
+.audit-report-blk__text--muted { color: var(--texto-gris-sutil); }
+.audit-report-blk__bar { height: 4px; border-radius: 3px; background: rgba(0,0,0,.08); overflow: hidden; margin: 0 .6rem .5rem; }
+.audit-report-blk__bar > i { display: block; height: 100%; background: var(--uclm-rojo-principal); }
+.audit-report-blk .audit-blk__findings { margin: 0 .6rem .55rem; }
+.audit-report-foot { font-size: .72rem; color: var(--texto-gris-sutil); font-style: italic; text-align: center; margin: .4rem 0 0; }
 .audit-panel-empty {
   font-size: .78rem; color: var(--texto-gris-sutil);
   font-style: italic; text-align: center; padding: 1.5rem .5rem; margin: 0;

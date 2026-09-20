@@ -264,6 +264,10 @@ def _build_audit_progress_payload(thread_id, uid, doc_data):
                     {"id": q.id, "text": q.text}
                     for q in audit_catalog.missing_mandatory(bid, answered)
                 ],
+                "answered_questions": [
+                    {"id": q.id, "text": q.text}
+                    for q in audit_catalog.answered_mandatory(bid, answered)
+                ],
                 "deferred_reason": stored.get("deferred_reason"),
                 "findings": [
                     {
@@ -384,8 +388,9 @@ def _format_audit_context(progress: dict) -> str:
             lines.append(f"  ▸ ({q['id']}) {q['text']}")
         lines.append("")
         lines.append(
-            f"Faltan {len(pending_q)}. Formula las siguientes 1-3 de esta lista, registra con "
-            "record_block_answers lo que el usuario responda, y no cierres el bloque hasta vaciarla."
+            f"Faltan {len(pending_q)}. Formula SOLO la primera de esta lista (una única pregunta, "
+            "sin el identificador entre paréntesis), registra con record_block_answers lo que el "
+            "usuario responda, y no cierres el bloque hasta vaciarla."
         )
     else:
         lines.append("")
