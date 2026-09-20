@@ -1,45 +1,79 @@
-# recava-agent-audit
-Orquestador en GCP + OpenAI Responses API & Agents SDK
-ReCaVa - Arquitectura cloud multiagente para proceso auditoría.
+# RecavAI
 
-Los usuarios pueden interactuar con el sistema de agentes de dos modos principales:
-a través de una interfaz web embebida (widget o iframe) en un sitio web
-o mediante llamadas directas a la API REST expuesta por Cloud Run.
-La capa de autenticación y control de acceso se gestiona con IAM de GCP (permiso Cloud Run Invoker para allUsers o grupos específicos) o con un API Gateway/IAP si se requiere seguridad adicional.
-Desde dispositivos móviles basta con cargar la misma interfaz web en un WebView o envolver peticiones al endpoint REST. Los desarrolladores integran el widget copiando un script de JavaScript que carga un iframe apuntando a un servidor estático (React/Vite/Tailwind) que sirva la UI de chat y, tras cada mensaje del usuario, el frontend envía la petición al Orquestador en Cloud Run, que invoca los Assistants de OpenAI y retorna la respuesta al cliente.
+Asistente conversacional de cumplimiento en sostenibilidad para el marco normativo europeo: CSRD, CSDDD, ESRS/NEIS, estándares GRI y guías de la OCDE. El usuario pregunta en lenguaje natural y el sistema responde citando los documentos concretos en los que se apoya.
 
-1. interacción del usuario
-El usuario escribe en el chat widget incrustado en tu web o app móvil. El componente front-end simplemente envía un POST JSON al endpoint HTTPS de Cloud Run. Comunidad OpenAIGoogle Cloud
-2. orquestador en Cloud Run
-El contenedor serverless recibe la petición y ejecuta la lógica del Agents SDK:
-decide si delega en el Auditor o en el Asistente
+Proyecto RECAVA-IA, Universidad de Castilla-La Mancha.
 
+## Dos modos sobre la misma base documental
 
-pasa el contexto acumulado en el hilo
+**Asesor** — preguntas y respuestas sobre normativa. El usuario lleva la iniciativa y cada respuesta llega con citas numeradas y desplegables a los fragmentos de origen.
 
+**Auditor** — entrevista guiada en ocho bloques. El sistema lleva la iniciativa: formula todas las preguntas obligatorias de cada bloque, contrasta cada respuesta con la normativa, señala las brechas con su severidad y no cierra un bloque hasta haberlo cubierto.
 
-recibe la respuesta estructurada de la Responses API. GitHubopenai.github.io
+## Arquitectura
 
+```
+Navegador (widget de chat · panel de experto)
+        │  HTTPS + token de Firebase
+        ▼
+Cloud Run · Flask + Gunicorn · europe-west1
+        │
+        ├── Gemini 2.5 Flash          generación y llamadas a herramientas
+        ├── Pinecone                  corpus normativo + documentos del usuario
+        ├── Neo4j AuraDB              grafo de entidades
+        ├── Firestore                 hilos, progreso de auditoría, documentos
+        └── BigQuery                  trazas de conversación
+```
 
-Cloud Run se factura sólo por CPU-segundos y memoria usados, con free tier mensual para cargas bajas, por lo que el coste fijo es casi nulo. Google Cloud
-3. ejecución de agentes en OpenAI
-La API de Assistants (usada por el orquestador para invocar a los sub-agentes) enruta la solicitud al assistant adecuado:
-Assistant Sostenibilidad – RAG nativo para contestar dudas técnicas (asumido, la implementación depende de la configuración del Assistant `ASISTENTE_ID`). MediumComunidad OpenAI
+Los *embeddings* se calculan dentro del contenedor con `sentence-transformers`; no hay API externa de *embeddings*. El modelo debe coincidir siempre con el que construyó el índice.
 
+## Documentación
 
-Assistant Auditoría – recorre la lista de preguntas y mantiene el estado del cuestionario (asumido, la implementación depende de la configuración del Assistant `AUDITOR_ID`).
+| Documento | Para qué |
+|---|---|
+| [docs/documentacion.html](docs/documentacion.html) | Explicación completa del sistema para personas: arquitectura, modos, interfaz, motor RAG, datos, seguridad |
+| [docs/SPEC.md](docs/SPEC.md) | Especificación normativa legible por máquina, con identificadores estables, invariantes y deuda conocida |
+| [docs/DESARROLLO.md](docs/DESARROLLO.md) | Montar el entorno local y trabajar en el código |
+| [docs/DESPLIEGUE.md](docs/DESPLIEGUE.md) | Subir cambios al entorno vivo, con despliegue canario y vuelta atrás |
+| [docs/MIGRACION.md](docs/MIGRACION.md) | Plan de migración a los proyectos GCP definitivos |
+| [benchmarks/README.md](benchmarks/README.md) | Medir la calidad de la recuperación |
+| [paper/](paper/) | Línea de investigación sobre construcción de la base de conocimiento |
 
+## Empezar
 
-Los dos assistants viven “hosted” en OpenAI.
-4. persistencia y trazabilidad
-Al cerrar cada iteración (o al terminar el workflow) el orquestador:
-compone la entrada “pregunta + respuesta” en un objeto JSON/Markdown,
+```bash
+./scripts/dev.sh setup     # entorno virtual y dependencias
+./scripts/dev.sh check     # dice qué falta por configurar
+./scripts/dev.sh test      # pruebas del auditor, sin red ni claves
+```
 
+Y en tres terminales:
 
-la guarda en Cloud Storage o Firestore para consulta y auditoría (Nota: esta funcionalidad no está implementada en el `main.py` actual pero está descrita como parte de la arquitectura). Google CloudGoogle Cloud
+```bash
+./scripts/dev.sh emulators   # Firebase Auth y Firestore locales
+./scripts/dev.sh api         # backend en http://localhost:8080
+./scripts/dev.sh web         # widget  en http://localhost:8000
+```
 
+## Estructura
 
-5. respuesta al front-end
-La respuesta estructurada vuelve al front-end, que la muestra en la ventana de chat. Para integraciones de terceros, el mismo endpoint de Cloud Run (`/orchestrate`) funciona como API REST autenticada mediante IAM o IAP. Google CloudStack Overflow
+```
+app.py                     rutas HTTP, autenticación, límites, endpoints de administración
+src/
+  config.py                variables de entorno y clientes externos
+  gemini_service.py        turnos de conversación, herramientas del auditor
+  rag_service.py           recuperación, enrutado de preguntas, grafo
+  audit_catalog.py         bloques y preguntas de la auditoría (fuente única de verdad)
+  assistant_instructions.py  prompts de asesor y auditor
+  corpus_pipeline.py       indexación del corpus (proceso por lotes, fuera del servicio)
+  rag_benchmark.py         medición de calidad
+  kb_experiment.py         experimento factorial de la línea de investigación
+public/chatbot/            widget de chat
+public/admin-panel/        panel de experto (React)
+functions/                 funciones de historial sobre BigQuery
+scripts/                   desarrollo local, despliegue y pruebas
+```
 
-El endpoint `/health` también está disponible para comprobaciones de estado del servicio.
+## Licencia y uso
+
+Software del proyecto RECAVA-IA. El corpus normativo incluye documentos de terceros (GRI, OCDE) cuyas condiciones de uso hay que respetar por separado: no se redistribuyen en este repositorio.

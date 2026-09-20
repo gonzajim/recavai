@@ -1,23 +1,29 @@
 # src/history_service.py
-from google.cloud.firestore_v1 import SERVER_TIMESTAMP
+from datetime import datetime, timedelta
 from src.config import logger
 
 
-def get_thread_history(firestore_db, thread_id: str, limit: int = 20) -> list[dict]:
+def get_thread_history(firestore_db, thread_id: str, limit: int = 40) -> list[dict]:
     """
-    Retrieves conversation history from Firestore and returns it in Gemini Content format.
-    Ensures roles alternate (user/model), starting with user.
+    Retrieves the MOST RECENT `limit` messages from Firestore, in chronological order,
+    in Gemini Content format. Ensures roles alternate (user/model), starting with user.
+
+    Se ordena DESCENDENTE y se invierte a propósito: con `order_by("created_at").limit(n)`
+    (ascendente) Firestore devuelve los n mensajes MÁS ANTIGUOS, de modo que a partir del
+    turno n/2 el modelo dejaba de ver la conversación reciente y repetía preguntas ya
+    respondidas. Es lo que rompía el modo auditor.
     """
     try:
+        from google.cloud.firestore_v1 import Query
         messages_ref = (
             firestore_db
             .collection("threads")
             .document(thread_id)
             .collection("messages")
-            .order_by("created_at")
+            .order_by("created_at", direction=Query.DESCENDING)
             .limit(limit)
         )
-        docs = messages_ref.stream()
+        docs = list(messages_ref.stream())[::-1]          # más recientes, en orden cronológico
         history = []
         for doc in docs:
             data = doc.to_dict()
@@ -47,15 +53,16 @@ def append_messages(
             .collection("messages")
         )
         batch = firestore_db.batch()
+        now = datetime.utcnow()
         batch.create(messages_ref.document(), {
             "role": "user",
             "text": user_text,
-            "created_at": SERVER_TIMESTAMP,
+            "created_at": now,
         })
         batch.create(messages_ref.document(), {
             "role": "model",
             "text": model_text,
-            "created_at": SERVER_TIMESTAMP,
+            "created_at": now + timedelta(microseconds=1),
         })
         batch.commit()
     except Exception:

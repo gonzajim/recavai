@@ -1,0 +1,32 @@
+GRI 306: Residuos 2020 (texto sintético de prueba del estándar GRI)
+
+SECCIÓN 1
+CONTENIDOS SOBRE EL ENFOQUE DE GESTIÓN
+
+Contenido 306-1
+Generación de residuos e impactos significativos relacionados con los residuos
+
+La organización informante debe presentar la siguiente información: para los impactos significativos reales y potenciales relacionados con los residuos, las entradas, actividades y salidas que conducen o podrían conducir a dichos impactos, y si estos impactos están relacionados con residuos generados en las propias actividades de la organización o con residuos generados aguas arriba o aguas abajo en su cadena de valor. La organización puede describir los materiales de entrada y los productos de salida en cada etapa del ciclo de vida.
+
+Contenido 306-2
+Gestión de impactos significativos relacionados con los residuos
+
+La organización informante debe presentar las medidas, incluidas las medidas de circularidad, adoptadas para prevenir la generación de residuos en sus propias actividades y aguas arriba y aguas abajo en su cadena de valor, y para gestionar los impactos significativos de los residuos generados. Cuando los residuos generados por la organización sean gestionados por un tercero, debe describir los procesos utilizados para determinar si el tercero gestiona los residuos de acuerdo con las obligaciones contractuales o legislativas. Debe indicar también los procesos utilizados para recopilar y monitorear los datos relacionados con los residuos.
+
+SECCIÓN 2
+CONTENIDOS TEMÁTICOS
+
+Contenido 306-3
+Residuos generados
+
+La organización informante debe presentar el peso total de los residuos generados en toneladas métricas y un desglose de este total por composición de los residuos. Debe presentar la información contextual necesaria para comprender los datos y cómo se han recopilado, indicando si se han utilizado mediciones directas, cálculos o estimaciones.
+
+Contenido 306-4
+Residuos no destinados a eliminación
+
+La organización informante debe presentar el peso total de los residuos no destinados a eliminación en toneladas métricas y un desglose de este total por composición de los residuos. Debe desglosar los residuos peligrosos y no peligrosos por operación de recuperación, incluyendo preparación para la reutilización, reciclaje y otras operaciones de recuperación, e indicar si se gestionan dentro o fuera de las instalaciones.
+
+Contenido 306-5
+Residuos destinados a eliminación
+
+La organización informante debe presentar el peso total de los residuos destinados a eliminación en toneladas métricas y un desglose de este total por composición de los residuos. Debe desglosar los residuos peligrosos y no peligrosos por operación de eliminación, incluyendo incineración con recuperación de energía, incineración sin recuperación de energía, depósito en vertedero y otras operaciones de eliminación.

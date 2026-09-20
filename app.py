@@ -13,11 +13,12 @@ from src.config import app, logger, genai_client, pinecone_index, embed_model, l
 from src.persistence_service import persist_conversation_turn
 from src.history_service import get_thread_history, append_messages
 from src.gemini_service import chat_with_auditor, chat_with_expert
-from src.rag_service import ingest_document, extract_pdf_chunks
+from src.rag_service import ingest_document, extract_pdf_chunks, upsert_user_file_chunks, delete_user_file_chunks
 from src.bigquery_service import (
     fetch_recent_conversations_for_user,
     fetch_conversation_thread,
 )
+from src import audit_catalog
 
 # --- Firebase Admin / Firestore ---
 import firebase_admin
@@ -51,25 +52,26 @@ firestore_db = firestore.client()
 # =============================================================================
 # 1) CORS y Rate Limiting
 # =============================================================================
-_allowed_origins_str = os.getenv(
-    "CORS_ORIGINS",
-    "https://recava-auditor-dev.web.app,https://recava-auditor.web.app,http://localhost:8000",
-)
+_DEFAULT_ALLOWED_ORIGINS = [
+    "https://recava-auditor-dev.web.app",
+    "https://recava-auditor.web.app",
+    # Admin panels (React app en public/admin-panel) — orígenes separados del chatbot.
+    "https://recava-auditor-dev-panel.web.app",
+    "https://recava-auditor-panel.web.app",
+    "http://localhost:8000",
+]
+_allowed_origins_str = os.getenv("CORS_ORIGINS", ",".join(_DEFAULT_ALLOWED_ORIGINS))
 _allowed_origins = [o.strip() for o in _allowed_origins_str.split(",") if o.strip()]
 
 if not _allowed_origins or "*" in _allowed_origins:
-    _allowed_origins = [
-        "https://recava-auditor-dev.web.app",
-        "https://recava-auditor.web.app",
-        "http://localhost:8000",
-    ]
+    _allowed_origins = _DEFAULT_ALLOWED_ORIGINS
     logger.warning("CORS_ORIGINS no definida o '*', usando defaults seguros: %s", _allowed_origins)
 
 CORS(
     app,
     origins=_allowed_origins,
     supports_credentials=True,
-    methods=["GET", "POST", "OPTIONS"],
+    methods=["GET", "POST", "PATCH", "DELETE", "OPTIONS"],
     allow_headers=["Authorization", "Content-Type", "Idempotency-Key"],
     expose_headers=["X-Request-Id"],
     max_age=86400,
@@ -137,6 +139,38 @@ def require_firebase_user_or_403():
     return decoded
 
 
+# Único administrador autorizado a gestionar usuarios. Cambiar aquí si se añaden más.
+_ADMIN_EMAILS = {"gonzalo.jimenez.martin@gmail.com"}
+
+
+def require_admin_or_403():
+    """Como require_firebase_user_or_403, pero exige además que el email
+    esté en _ADMIN_EMAILS. Usar para cualquier endpoint de administración."""
+    decoded = require_firebase_user_or_403()
+    email = (decoded.get("email") or "").lower()
+    if email not in _ADMIN_EMAILS:
+        logger.warning("Admin: acceso denegado a %s", email)
+        abort(403, description="Acceso restringido a administradores.")
+    return decoded
+
+
+_MAX_ADMIN_USERS_LISTED = 1000
+
+
+def _serialize_fb_user(u) -> dict:
+    meta = u.user_metadata
+    return {
+        "uid": u.uid,
+        "email": u.email,
+        "display_name": u.display_name,
+        "email_verified": u.email_verified,
+        "disabled": u.disabled,
+        "created_at": getattr(meta, "creation_timestamp", None),
+        "last_sign_in_at": getattr(meta, "last_sign_in_timestamp", None),
+        "is_admin": (u.email or "").lower() in _ADMIN_EMAILS,
+    }
+
+
 def _build_user_metadata(decoded_user: dict) -> dict:
     user_id = decoded_user.get("user_id") or decoded_user.get("uid")
     return {
@@ -167,18 +201,12 @@ def _iso_utc(ts):
 # =============================================================================
 # 4) Bloques y progreso de auditoría
 # =============================================================================
-AUDIT_BLOCKS = [
-    {"id": "block_1", "label": "1. Contexto y Alcance"},
-    {"id": "block_2", "label": "2. Información Corporativa"},
-    {"id": "block_3", "label": "3. Cadena de Valor"},
-    {"id": "block_4", "label": "4. Gobernanza y Compliance"},
-    {"id": "block_5", "label": "5. Impacto Ambiental"},
-    {"id": "block_6", "label": "6. Personas y Derechos Humanos"},
-    {"id": "block_7", "label": "7. Riesgos y Controles"},
-    {"id": "block_8", "label": "8. Conclusiones y Roadmap"},
-]
-AUDIT_BLOCK_IDS = {b["id"] for b in AUDIT_BLOCKS}
-VALID_STATUSES = {"pending", "in_progress", "completed"}
+# Los bloques y sus preguntas viven en src/audit_catalog.py (fuente única de verdad,
+# compartida con el prompt del auditor y con la validación de cierre del servidor).
+AUDIT_BLOCKS = [{"id": b.id, "label": b.label} for b in audit_catalog.AUDIT_CATALOG]
+AUDIT_BLOCK_IDS = set(audit_catalog.BLOCK_IDS)
+# "deferred": el usuario pidió saltar el bloque; queda incompleto y se puede retomar.
+VALID_STATUSES = {"pending", "in_progress", "completed", "deferred"}
 
 
 def _default_audit_progress_state(uid=None):
@@ -190,36 +218,87 @@ def _get_audit_progress_doc(thread_id: str):
 
 
 def _build_audit_progress_payload(thread_id, uid, doc_data):
+    """
+    Estado de la auditoría, con cobertura de preguntas por bloque.
+
+    Elección del bloque activo, en este orden:
+      1. el que esté marcado `in_progress`;
+      2. el primer `pending` (los aplazados se saltan);
+      3. si ya no quedan pendientes, el primer `deferred` (hay que volver a él);
+      4. si no queda nada, el último bloque.
+    """
     data = doc_data or {}
     blocks_state = data.get("blocks") or {}
     blocks_payload = []
     completed = 0
     active_block_id = None
     first_pending = None
+    first_deferred = None
 
     for block in AUDIT_BLOCKS:
-        stored = blocks_state.get(block["id"], {}) or {}
+        bid = block["id"]
+        stored = blocks_state.get(bid, {}) or {}
         status = stored.get("status", "pending")
+        answered = [q for q in (stored.get("answered") or []) if isinstance(q, str)]
+        done_m, total_m = audit_catalog.coverage(bid, answered)
+
         if status == "completed":
             completed += 1
         if status == "in_progress" and active_block_id is None:
-            active_block_id = block["id"]
+            active_block_id = bid
         if status == "pending" and first_pending is None:
-            first_pending = block["id"]
+            first_pending = bid
+        if status == "deferred" and first_deferred is None:
+            first_deferred = bid
 
         blocks_payload.append(
             {
-                "id": block["id"],
+                "id": bid,
                 "label": block["label"],
                 "status": status,
                 "summary": stored.get("summary"),
+                "answered": answered,
+                "answered_count": done_m,
+                "mandatory_count": total_m,
+                "pending_questions": [
+                    {"id": q.id, "text": q.text}
+                    for q in audit_catalog.missing_mandatory(bid, answered)
+                ],
+                "answered_questions": [
+                    {"id": q.id, "text": q.text}
+                    for q in audit_catalog.answered_mandatory(bid, answered)
+                ],
+                "deferred_reason": stored.get("deferred_reason"),
+                "findings": [
+                    {
+                        "question_ids": f.get("question_ids") or [],
+                        "verdict": f.get("verdict"),
+                        "assessment": f.get("assessment"),
+                        "at": f.get("at"),
+                    }
+                    for f in (stored.get("findings") or [])
+                    if isinstance(f, dict)
+                ],
                 "completed_at": _iso_utc(stored.get("completed_at")),
                 "updated_at": _iso_utc(stored.get("updated_at")),
             }
         )
 
+    # El bloque activo guardado manda: lo fijan las herramientas del auditor al registrar,
+    # cerrar, aplazar o retomar. La deducción por estado queda como respaldo para hilos
+    # antiguos que no tienen el campo.
+    stored_active = data.get("active_block_id")
+    if stored_active in AUDIT_BLOCK_IDS:
+        st = (blocks_state.get(stored_active) or {}).get("status", "pending")
+        if st != "completed":
+            active_block_id = stored_active
+
     if active_block_id is None:
-        active_block_id = first_pending or (AUDIT_BLOCKS[-1]["id"] if AUDIT_BLOCKS else None)
+        active_block_id = (
+            first_pending
+            or first_deferred
+            or (AUDIT_BLOCKS[-1]["id"] if AUDIT_BLOCKS else None)
+        )
 
     total = len(AUDIT_BLOCKS)
     percent = int(round((completed / total) * 100)) if total else 0
@@ -238,34 +317,87 @@ def _build_audit_progress_payload(thread_id, uid, doc_data):
 
 def _format_audit_context(progress: dict) -> str:
     """
-    Converts the audit progress payload into a human-readable string
-    injected into AUDITOR_SYSTEM_PROMPT at {audit_context}.
+    Convierte el progreso en el texto que se inyecta en AUDITOR_SYSTEM_PROMPT.
+
+    Lo importante es el bloque "PENDIENTES EN ESTE BLOQUE": es el guion literal del
+    modelo. Sin él, el auditor tenía que deducir de la conversación qué preguntas ya
+    había hecho, y por eso saltaba preguntas y no cerraba nunca.
     """
-    lines = []
+    blocks = progress.get("blocks", [])
     active = progress.get("active_block_id", "block_1")
     completed_count = progress.get("completed_count", 0)
-    total = progress.get("total_blocks", 8)
+    total = progress.get("total_blocks", len(AUDIT_BLOCKS))
+    by_id = {b["id"]: b for b in blocks}
+    ab = by_id.get(active)
 
-    # Find label for active block
-    active_label = active
-    for b in progress.get("blocks", []):
-        if b["id"] == active:
-            active_label = b["label"]
-            break
+    lines = [f"Progreso global: {completed_count} de {total} bloques cerrados."]
 
-    lines.append(f"Bloque activo: {active_label}")
-    lines.append(f"Progreso: {completed_count} de {total} bloques completados")
-
-    completed_blocks = [b for b in progress.get("blocks", []) if b["status"] == "completed"]
+    completed_blocks = [b for b in blocks if b["status"] == "completed"]
     if completed_blocks:
-        lines.append("Bloques completados:")
+        lines.append("")
+        lines.append("BLOQUES YA CERRADOS (no vuelvas a preguntar sobre ellos):")
         for b in completed_blocks:
-            summary = b.get("summary") or "(sin resumen)"
-            lines.append(f"  • {b['label']}: {summary}")
+            lines.append(f"  • {b['label']}: {b.get('summary') or '(sin resumen)'}")
 
-    pending = [b["label"] for b in progress.get("blocks", []) if b["status"] != "completed"]
-    if pending:
-        lines.append(f"Bloques pendientes: {', '.join(pending)}")
+    deferred = [b for b in blocks if b["status"] == "deferred"]
+    if deferred:
+        lines.append("")
+        lines.append("BLOQUES APLAZADOS (incompletos; retómalos con resume_block cuando proceda):")
+        for b in deferred:
+            reason = b.get("deferred_reason") or "sin motivo registrado"
+            lines.append(
+                f"  • {b['label']} [{b['id']}] — {b['answered_count']}/{b['mandatory_count']} "
+                f"obligatorias respondidas. Motivo: {reason}"
+            )
+
+    if not ab:
+        lines.append("")
+        lines.append("No hay bloque activo: la auditoría está completa.")
+        return "\n".join(lines)
+
+    lines.append("")
+    lines.append("══ BLOQUE ACTIVO ══")
+    lines.append(f"{ab['label']}  [{ab['id']}]")
+    lines.append(
+        f"Cobertura: {ab['answered_count']} de {ab['mandatory_count']} preguntas obligatorias registradas."
+    )
+
+    answered_ids = set(ab.get("answered") or [])
+    block_def = audit_catalog.get_block(ab["id"])
+    if block_def and answered_ids:
+        done = [q for q in block_def.questions if q.id in answered_ids]
+        if done:
+            lines.append("")
+            lines.append("YA RESPONDIDAS (NO las repitas):")
+            for q in done:
+                lines.append(f"  ✓ ({q.id}) {q.text}")
+
+    gaps = [f for f in (ab.get("findings") or [])
+            if f.get("verdict") in ("no cumple", "cumple parcialmente")]
+    if gaps:
+        lines.append("")
+        lines.append("BRECHAS YA DETECTADAS EN ESTE BLOQUE (recógelas en el resumen al cerrarlo):")
+        for f in gaps[-6:]:
+            lines.append(f"  ! [{f.get('verdict')}] {', '.join(f.get('question_ids') or [])}")
+
+    pending_q = ab.get("pending_questions") or []
+    if pending_q:
+        lines.append("")
+        lines.append("PENDIENTES EN ESTE BLOQUE — este es tu guion, en este orden:")
+        for q in pending_q:
+            lines.append(f"  ▸ ({q['id']}) {q['text']}")
+        lines.append("")
+        lines.append(
+            f"Faltan {len(pending_q)}. Formula SOLO la primera de esta lista (una única pregunta, "
+            "sin el identificador entre paréntesis), registra con record_block_answers lo que el "
+            "usuario responda, y no cierres el bloque hasta vaciarla."
+        )
+    else:
+        lines.append("")
+        lines.append(
+            "PENDIENTES: ninguna. Todas las obligatorias están registradas: cierra el bloque "
+            "ahora con complete_audit_block y pasa al siguiente."
+        )
 
     return "\n".join(lines)
 
@@ -328,7 +460,9 @@ def chat_with_main_audit_orchestrator():
             thread_id, uid, progress_doc.to_dict() if progress_doc.exists else {}
         )
         audit_context = _format_audit_context(progress)
-        history = get_thread_history(firestore_db, thread_id)
+        # La auditoría necesita más memoria que el asesor: un bloque con 6 obligatorias
+        # consume del orden de 12-16 mensajes, y hay 8 bloques.
+        history = get_thread_history(firestore_db, thread_id, limit=80)
 
         response_text = chat_with_auditor(
             genai_client,
@@ -339,6 +473,8 @@ def chat_with_main_audit_orchestrator():
             user_message,
             thread_id,
             audit_context,
+            local_store=local_store,
+            uid=uid,
         )
 
         append_messages(firestore_db, thread_id, user_message, response_text)
@@ -412,6 +548,7 @@ def chat_with_sustainability_expert():
             user_message,
             thread_id=thread_id,
             local_store=local_store,
+            uid=uid,
         )
 
         append_messages(firestore_db, thread_id, user_message, response_text)
@@ -450,13 +587,37 @@ def chat_with_sustainability_expert():
         return fail("Internal server error", status=500, details=str(e))
 
 
+def _user_files_ref(uid: str):
+    return firestore_db.collection("user_documents").document(uid).collection("files")
+
+
+def _get_user_files(uid: str) -> list[dict]:
+    docs = _user_files_ref(uid).order_by("uploaded_at").stream()
+    files = []
+    for doc in docs:
+        d = doc.to_dict()
+        uploaded_at = d.get("uploaded_at")
+        files.append({
+            "doc_id": d["doc_id"],
+            "filename": d["filename"],
+            "chunk_count": d["chunk_count"],
+            "size_bytes": d.get("size_bytes", 0),
+            "uploaded_at": uploaded_at.isoformat() if hasattr(uploaded_at, "isoformat") else str(uploaded_at or ""),
+        })
+    return files
+
+
+_MAX_USER_FILES = 25
+
+
 @limiter.limit("10/minute")
 @app.route("/upload_document", methods=["POST"])
 def upload_document():
     """
-    Accepts a PDF upload, extracts + chunks its text, embeds every chunk,
-    and stores the vectors in the in-memory FAISS index keyed by thread_id.
-    Requires Firebase auth. Returns {thread_id, chunks_indexed, filename}.
+    Accepts a PDF upload, chunks + embeds its text, stores vectors permanently
+    in the user's Pinecone namespace, and records metadata in Firestore.
+    Enforces a 25-file limit per user.
+    Returns {doc_id, filename, chunks_indexed, files: [...]}.
     """
     decoded_user = require_firebase_user_or_403()
     uid = decoded_user["uid"]
@@ -470,44 +631,245 @@ def upload_document():
         return fail("Solo se admiten archivos PDF.", 415)
 
     file_bytes = uploaded_file.read()
-    if len(file_bytes) > 20 * 1024 * 1024:
-        return fail("El archivo supera el límite de 20 MB.", 413)
     if not file_bytes:
         return fail("El archivo está vacío.", 400)
+    if len(file_bytes) > 20 * 1024 * 1024:
+        return fail("El archivo supera el límite de 20 MB.", 413)
 
-    thread_id = (request.form.get("thread_id") or "").strip() or str(uuid.uuid4())
-    ensure_thread_ownership(thread_id, uid)
+    if pinecone_index is None:
+        return fail("El servicio de almacenamiento de documentos no está disponible.", 503)
+
+    # Enforce 25-file limit
+    existing_files = _get_user_files(uid)
+    if len(existing_files) >= _MAX_USER_FILES:
+        return fail(
+            f"Has alcanzado el límite de {_MAX_USER_FILES} documentos. "
+            "Elimina alguno antes de subir uno nuevo.", 429
+        )
 
     try:
         chunks = extract_pdf_chunks(file_bytes)
         if not chunks:
             return fail("No se pudo extraer texto del PDF.", 422)
 
-        embeddings = [
-            embed_model.encode(c, normalize_embeddings=True).tolist() for c in chunks
-        ]
-        total = local_store.add_chunks(thread_id, chunks, embeddings)
+        doc_id = str(uuid.uuid4())
+        filename = uploaded_file.filename
 
-        logger.info(
-            "/upload_document: uid=%s thread=%s file=%s chunks=%d total=%d",
-            uid, thread_id, uploaded_file.filename, len(chunks), total,
-        )
+        upsert_user_file_chunks(embed_model, pinecone_index, uid, doc_id, filename, chunks)
+
+        _user_files_ref(uid).document(doc_id).set({
+            "doc_id": doc_id,
+            "filename": filename,
+            "chunk_count": len(chunks),
+            "size_bytes": len(file_bytes),
+            "uploaded_at": SERVER_TIMESTAMP,
+        })
+
+        logger.info("/upload_document: uid=%s doc_id=%s file=%s chunks=%d", uid, doc_id, filename, len(chunks))
+
+        # Return updated file list so frontend can refresh in one round-trip
+        all_files = _get_user_files(uid)
         return ok({
-            "thread_id": thread_id,
+            "doc_id": doc_id,
+            "filename": filename,
             "chunks_indexed": len(chunks),
-            "total_chunks": total,
-            "filename": uploaded_file.filename,
+            "files": all_files,
         })
     except Exception as e:
         logger.error("/upload_document: error: %s", e, exc_info=True)
         return fail("Error al procesar el documento.", 500, details=str(e))
 
 
+@limiter.limit("30/minute")
+@app.route("/user_files", methods=["GET"])
+def list_user_files():
+    """Returns the list of files the authenticated user has uploaded."""
+    decoded_user = require_firebase_user_or_403()
+    uid = decoded_user["uid"]
+    try:
+        return ok({"files": _get_user_files(uid)})
+    except Exception as e:
+        logger.error("/user_files GET: uid=%s error=%s", uid, e, exc_info=True)
+        return fail("Error al obtener los documentos.", 500)
+
+
+@limiter.limit("20/minute")
+@app.route("/user_files/<doc_id>", methods=["DELETE"])
+def delete_user_file(doc_id: str):
+    """Deletes a user's uploaded file from Pinecone and Firestore."""
+    decoded_user = require_firebase_user_or_403()
+    uid = decoded_user["uid"]
+
+    if pinecone_index is None:
+        return fail("El servicio de almacenamiento no está disponible.", 503)
+
+    file_ref = _user_files_ref(uid).document(doc_id)
+    file_doc = file_ref.get()
+    if not file_doc.exists:
+        return fail("Documento no encontrado.", 404)
+
+    data = file_doc.to_dict()
+    chunk_count = data.get("chunk_count", 0)
+    filename = data.get("filename", doc_id)
+
+    try:
+        delete_user_file_chunks(pinecone_index, uid, doc_id, chunk_count)
+        file_ref.delete()
+        logger.info("/user_files DELETE: uid=%s doc_id=%s file=%s chunks=%d", uid, doc_id, filename, chunk_count)
+        return ok({"doc_id": doc_id, "deleted": True, "files": _get_user_files(uid)})
+    except Exception as e:
+        logger.error("/user_files DELETE: uid=%s doc_id=%s error=%s", uid, doc_id, e, exc_info=True)
+        return fail("Error al eliminar el documento.", 500, details=str(e))
+
+
+@limiter.limit("10/minute")
+@app.route("/admin/users", methods=["POST"])
+def admin_create_user():
+    """Creates a new Firebase Auth user (admin only)."""
+    decoded_admin = require_admin_or_403()
+
+    if request.content_type != "application/json":
+        return fail("Content-Type must be application/json", 415)
+    data = request.get_json(silent=True) or {}
+
+    email = (data.get("email") or "").strip().lower()
+    password = data.get("password") or ""
+    display_name = (data.get("display_name") or "").strip() or None
+
+    if not email or "@" not in email:
+        return fail("Email inválido.", 400)
+    if len(password) < 6:
+        return fail("La contraseña debe tener al menos 6 caracteres.", 400)
+
+    try:
+        kwargs = {
+            "email": email,
+            "password": password,
+            "email_verified": bool(data.get("email_verified", False)),
+        }
+        if display_name:
+            kwargs["display_name"] = display_name
+        new_user = fb_auth.create_user(**kwargs)
+        logger.info(
+            "/admin/users POST: admin=%s created uid=%s email=%s",
+            decoded_admin.get("email"), new_user.uid, email,
+        )
+        return ok({"user": _serialize_fb_user(fb_auth.get_user(new_user.uid))})
+    except fb_auth.EmailAlreadyExistsError:
+        return fail("Ya existe una cuenta con ese correo.", 409)
+    except Exception as e:
+        logger.error("/admin/users POST: error=%s", e, exc_info=True)
+        return fail("Error al crear el usuario.", 500, details=str(e))
+
+
+@limiter.limit("30/minute")
+@app.route("/admin/users", methods=["GET"])
+def admin_list_users():
+    """Lists Firebase Auth users (admin only)."""
+    require_admin_or_403()
+    try:
+        users = []
+        for u in fb_auth.list_users().iterate_all():
+            users.append(_serialize_fb_user(u))
+            if len(users) >= _MAX_ADMIN_USERS_LISTED:
+                break
+        users.sort(key=lambda x: x.get("created_at") or 0, reverse=True)
+        return ok({"users": users})
+    except Exception as e:
+        logger.error("/admin/users GET: error=%s", e, exc_info=True)
+        return fail("Error al listar usuarios.", 500, details=str(e))
+
+
+@limiter.limit("20/minute")
+@app.route("/admin/users/<uid>", methods=["PATCH"])
+def admin_update_user(uid: str):
+    """Updates an existing Firebase Auth user (admin only): email, password,
+    display_name, disabled, email_verified. Only the provided fields change."""
+    decoded_admin = require_admin_or_403()
+
+    if request.content_type != "application/json":
+        return fail("Content-Type must be application/json", 415)
+    data = request.get_json(silent=True) or {}
+
+    kwargs = {}
+    if "email" in data:
+        email = (data.get("email") or "").strip().lower()
+        if not email or "@" not in email:
+            return fail("Email inválido.", 400)
+        kwargs["email"] = email
+    if data.get("password"):
+        if len(data["password"]) < 6:
+            return fail("La contraseña debe tener al menos 6 caracteres.", 400)
+        kwargs["password"] = data["password"]
+    if "display_name" in data:
+        kwargs["display_name"] = data.get("display_name") or None
+    if "disabled" in data:
+        kwargs["disabled"] = bool(data["disabled"])
+    if "email_verified" in data:
+        kwargs["email_verified"] = bool(data["email_verified"])
+
+    if not kwargs:
+        return fail("No se especificaron cambios.", 400)
+
+    try:
+        target = fb_auth.get_user(uid)
+    except fb_auth.UserNotFoundError:
+        return fail("Usuario no encontrado.", 404)
+
+    # No se puede deshabilitar la cuenta de administrador por accidente.
+    if (target.email or "").lower() in _ADMIN_EMAILS and kwargs.get("disabled") is True:
+        return fail("No se puede deshabilitar la cuenta de administrador.", 400)
+
+    try:
+        updated = fb_auth.update_user(uid, **kwargs)
+        logger.info(
+            "/admin/users PATCH: admin=%s uid=%s fields=%s",
+            decoded_admin.get("email"), uid, list(kwargs.keys()),
+        )
+        return ok({"user": _serialize_fb_user(updated)})
+    except fb_auth.EmailAlreadyExistsError:
+        return fail("Ya existe una cuenta con ese correo.", 409)
+    except Exception as e:
+        logger.error("/admin/users PATCH: uid=%s error=%s", uid, e, exc_info=True)
+        return fail("Error al actualizar el usuario.", 500, details=str(e))
+
+
+@limiter.limit("10/minute")
+@app.route("/admin/users/<uid>", methods=["DELETE"])
+def admin_delete_user(uid: str):
+    """Deletes a Firebase Auth user (admin only). Refuses to delete admin accounts."""
+    decoded_admin = require_admin_or_403()
+
+    try:
+        target = fb_auth.get_user(uid)
+    except fb_auth.UserNotFoundError:
+        return fail("Usuario no encontrado.", 404)
+
+    if (target.email or "").lower() in _ADMIN_EMAILS:
+        return fail("No se puede eliminar la cuenta de administrador.", 400)
+
+    try:
+        fb_auth.delete_user(uid)
+        logger.info(
+            "/admin/users DELETE: admin=%s uid=%s email=%s",
+            decoded_admin.get("email"), uid, target.email,
+        )
+        return ok({"uid": uid, "deleted": True})
+    except Exception as e:
+        logger.error("/admin/users DELETE: uid=%s error=%s", uid, e, exc_info=True)
+        return fail("Error al eliminar el usuario.", 500, details=str(e))
+
+
 @limiter.limit("10/minute")
 @app.route("/admin/ingest_document", methods=["POST"])
 def admin_ingest_document():
-    """Ingests a document into the Pinecone RAG index."""
-    decoded_user = require_firebase_user_or_403()
+    """Ingests a document into the global Pinecone corpus (admin only).
+
+    Escribe en la base documental que alimenta las respuestas de TODOS los usuarios,
+    así que exige rol de administrador. Hasta 2026-09-19 validaba solo usuario
+    verificado: cualquier cuenta podía inyectar contenido en el corpus.
+    """
+    decoded_user = require_admin_or_403()
 
     if request.content_type != "application/json":
         return fail("Content-Type must be application/json", 415)

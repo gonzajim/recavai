@@ -29,6 +29,7 @@ def search_documents(
     top_k: int = _CANDIDATE_K,
     metadata_filter: dict | None = None,
     min_score: float = _MIN_SCORE,
+    namespace: str | None = None,
 ) -> list[dict]:
     """
     Queries Pinecone and returns matching document excerpts.
@@ -36,6 +37,7 @@ def search_documents(
     Corpus categories: 'CSDDD', 'GRI', 'general' (includes CSRD/NEIS/OCDE docs).
     Pass metadata_filter to narrow by category, e.g.:
       {"primary_category": {"$in": ["CSDDD", "general"]}}
+    Pass namespace to restrict to a specific Pinecone namespace (e.g. uid for user docs).
     Returns [] if pinecone_index is None or on any exception.
     """
     if pinecone_index is None:
@@ -48,6 +50,8 @@ def search_documents(
         )
         if metadata_filter:
             query_kwargs["filter"] = metadata_filter
+        if namespace:
+            query_kwargs["namespace"] = namespace
 
         response = pinecone_index.query(**query_kwargs)
 
@@ -60,7 +64,7 @@ def search_documents(
             results.append({
                 "content": meta.get("text") or meta.get("content", ""),
                 "title": meta.get("source") or meta.get("title", ""),
-                "category": meta.get("primary_category", ""),
+                "category": meta.get("primary_category", "uploaded"),
                 "score": score,
                 "page": meta.get("page"),
                 "total_pages": meta.get("total_pages"),
@@ -70,6 +74,65 @@ def search_documents(
     except Exception:
         logger.error("Pinecone search failed", exc_info=True)
         return []
+
+
+_MAX_USER_FILES = 25
+_USER_DOCS_MIN_SCORE = 0.25
+
+
+def upsert_user_file_chunks(
+    embed_model,
+    pinecone_index,
+    uid: str,
+    doc_id: str,
+    filename: str,
+    chunks: list[str],
+) -> None:
+    """Embeds and upserts all chunks of a user file into the user's Pinecone namespace."""
+    vectors = []
+    for i, chunk in enumerate(chunks):
+        embedding = generate_embedding(embed_model, chunk)
+        vectors.append({
+            "id": f"{doc_id}_{i:05d}",
+            "values": embedding,
+            "metadata": {
+                "text": chunk,
+                "source": filename,
+                "doc_id": doc_id,
+                "filename": filename,
+                "chunk_idx": i,
+                "primary_category": "uploaded",
+            },
+        })
+    # Upsert in batches of 100 to avoid Pinecone request size limits
+    for start in range(0, len(vectors), 100):
+        pinecone_index.upsert(vectors=vectors[start:start + 100], namespace=uid)
+    logger.info("Upserted %d chunks for doc=%s uid=%s", len(vectors), doc_id, uid)
+
+
+def delete_user_file_chunks(pinecone_index, uid: str, doc_id: str, chunk_count: int) -> None:
+    """Deletes all chunks of a user file from their Pinecone namespace."""
+    ids = [f"{doc_id}_{i:05d}" for i in range(chunk_count)]
+    # Pinecone delete accepts up to 1000 ids per call
+    for start in range(0, len(ids), 1000):
+        pinecone_index.delete(ids=ids[start:start + 1000], namespace=uid)
+    logger.info("Deleted %d chunks for doc=%s uid=%s", len(ids), doc_id, uid)
+
+
+def search_user_documents(
+    pinecone_index,
+    query_embedding: list[float],
+    uid: str,
+    top_k: int = 6,
+) -> list[dict]:
+    """Searches the user's Pinecone namespace for relevant chunks from their uploaded files."""
+    return search_documents(
+        pinecone_index,
+        query_embedding,
+        top_k=top_k,
+        min_score=_USER_DOCS_MIN_SCORE,
+        namespace=uid,
+    )
 
 
 def ingest_document(

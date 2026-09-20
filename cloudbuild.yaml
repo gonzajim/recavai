@@ -1,22 +1,31 @@
 # =====================================================================================
-# cloudbuild.yaml Parametrizado para Entornos PROD y DEV
+# cloudbuild.yaml — despliegue del orquestador + hosting, parametrizado por entorno
 # =====================================================================================
-# Optimizaciones de build time:
-#  - DOCKER_BUILDKIT=1 + BUILDKIT_INLINE_CACHE=1: cache por capas embebido en la imagen.
-#    Builds con cache caliente (sin cambios en requirements.txt): ~3-5 min.
-#  - Dockerfile separa torch CPU-only (~200MB) del resto: requirements.txt puede
-#    cambiar sin re-descargar torch.
-#  - Digest fijado en FROM del builder: Docker Hub no invalida el cache entre builds.
+# NO se ejecuta solo: el trigger antiguo apuntaba a un proyecto GCP que ya no es
+# accesible, llevaba meses muerto y se retiró. Hasta que se cree un trigger nuevo,
+# este fichero se lanza a mano con `scripts/deploy.sh` o con:
+#
+#   gcloud builds submit --config=cloudbuild.yaml --project=recava-auditor-dev \
+#     --substitutions=_SERVICE_NAME=orchestrator-dev,_FIREBASE_PROJECT_ALIAS=dev,_TRAFFIC=latest
+#
+# Entornos reales (comprobado 2026-09-19):
+#   dev   proyecto recava-auditor-dev  · servicio orchestrator-dev  · sitios recava-auditor-dev[-panel]
+#         Es el entorno VIVO: lo que usan hoy los usuarios.
+#   prod  proyecto recava-auditor-prod · SIN FACTURACIÓN habilitada, sin Secret Manager.
+#         No operativo. Ver docs/DESPLIEGUE.md antes de intentar usarlo.
+#
+# _TRAFFIC controla el riesgo del despliegue:
+#   canary  (por defecto) revisión nueva SIN tráfico, accesible por su etiqueta para probar.
+#   latest  envía el 100% del tráfico a la revisión nueva.
 # =====================================================================================
 
 steps:
   # -------------------------------------------------------------------------------------
-  # PASO 1a: Build de la imagen Docker con BuildKit + cache embebido
+  # 1. Imagen del backend (BuildKit + caché embebida en la propia imagen)
   # -------------------------------------------------------------------------------------
   - name: 'gcr.io/cloud-builders/docker'
     id: 'Build-Backend-Image'
-    env:
-      - 'DOCKER_BUILDKIT=1'
+    env: ['DOCKER_BUILDKIT=1']
     args:
       - 'build'
       - '--build-arg'
@@ -25,96 +34,113 @@ steps:
       - 'europe-west1-docker.pkg.dev/${PROJECT_ID}/cloud-run-source-deploy/${_SERVICE_NAME}:latest'
       - '-t'
       - 'europe-west1-docker.pkg.dev/${PROJECT_ID}/cloud-run-source-deploy/${_SERVICE_NAME}:latest'
+      - '-t'
+      - 'europe-west1-docker.pkg.dev/${PROJECT_ID}/cloud-run-source-deploy/${_SERVICE_NAME}:${SHORT_SHA}'
       - '.'
 
-  # -------------------------------------------------------------------------------------
-  # PASO 1b: Push de la imagen (actualiza :latest con metadata de cache BuildKit)
-  # -------------------------------------------------------------------------------------
   - name: 'gcr.io/cloud-builders/docker'
     id: 'Push-Backend-Image'
-    args:
-      - 'push'
-      - 'europe-west1-docker.pkg.dev/${PROJECT_ID}/cloud-run-source-deploy/${_SERVICE_NAME}:latest'
+    args: ['push', '--all-tags',
+           'europe-west1-docker.pkg.dev/${PROJECT_ID}/cloud-run-source-deploy/${_SERVICE_NAME}']
     waitFor: ['Build-Backend-Image']
 
   # -------------------------------------------------------------------------------------
-  # PASO 1c: Desplegar el Backend en Cloud Run
+  # 2. Cloud Run. En modo canary la revisión queda SIN tráfico y se prueba por su etiqueta.
   # -------------------------------------------------------------------------------------
   - name: 'gcr.io/google.com/cloudsdktool/cloud-sdk'
-    id: 'Deploy-Backend-to-Cloud-Run'
-    entrypoint: 'gcloud'
+    id: 'Deploy-Backend'
+    entrypoint: 'bash'
     args:
-      - 'run'
-      - 'deploy'
-      - '${_SERVICE_NAME}'
-      - '--image'
-      - 'europe-west1-docker.pkg.dev/${PROJECT_ID}/cloud-run-source-deploy/${_SERVICE_NAME}:latest'
-      - '--region'
-      - 'europe-west1'
-      - '--platform'
-      - 'managed'
-      - '--allow-unauthenticated'
-      - '--port'
-      - '8080'
-      - '--project'
-      - '${PROJECT_ID}'
-      - '--update-secrets=GEMINI_API_KEY=GEMINI_API_KEY:latest,PINECONE_API_KEY=PINECONE_API_KEY:latest,PINECONE_INDEX_NAME=PINECONE_INDEX_NAME:latest,BIGQUERY_DATASET_ID=BIGQUERY_DATASET_ID:latest,BIGQUERY_TABLE_ID=BIGQUERY_TABLE_ID:latest,NEO4J_PASSWORD=NEO4J_PASSWORD:latest'
-      - '--set-env-vars=EMBEDDING_MODEL_NAME=sentence-transformers/all-MiniLM-L6-v2,NEO4J_URI=neo4j+s://273d9982.databases.neo4j.io,NEO4J_USERNAME=273d9982,NEO4J_DATABASE=273d9982'
-      - '--timeout=600s'
-      - '--concurrency=40'
-      - '--cpu=2'
-      - '--memory=4Gi'
+      - '-c'
+      - |
+        set -euo pipefail
+        # $$ escapa el $ para que Cloud Build no lo tome por una sustitución suya.
+        TRAFFIC_ARGS="--no-traffic --tag=${_CANARY_TAG}"
+        if [ "${_TRAFFIC}" = "latest" ]; then TRAFFIC_ARGS=""; fi
+        gcloud run deploy ${_SERVICE_NAME} \
+          --image europe-west1-docker.pkg.dev/${PROJECT_ID}/cloud-run-source-deploy/${_SERVICE_NAME}:${SHORT_SHA} \
+          --region europe-west1 --platform managed --project ${PROJECT_ID} \
+          --allow-unauthenticated --port 8080 \
+          --update-secrets=GEMINI_API_KEY=GEMINI_API_KEY:latest,PINECONE_API_KEY=PINECONE_API_KEY:latest,PINECONE_INDEX_NAME=PINECONE_INDEX_NAME:latest,BIGQUERY_DATASET_ID=BIGQUERY_DATASET_ID:latest,BIGQUERY_TABLE_ID=BIGQUERY_TABLE_ID:latest,NEO4J_PASSWORD=NEO4J_PASSWORD:latest \
+          --set-env-vars=EMBEDDING_MODEL_NAME=${_EMBEDDING_MODEL},NEO4J_URI=${_NEO4J_URI},NEO4J_USERNAME=${_NEO4J_USER},NEO4J_DATABASE=${_NEO4J_DB} \
+          --timeout=600s --concurrency=40 --cpu=2 --memory=4Gi \
+          $$TRAFFIC_ARGS
+        if [ "${_TRAFFIC}" != "latest" ]; then
+          # La URL etiquetada es la del servicio con el prefijo "TAG---". Se construye
+          # así y no con un filtro de --format porque las proyecciones de gcloud no
+          # saben filtrar una lista por el valor de uno de sus campos.
+          BASE=$(gcloud run services describe ${_SERVICE_NAME} --region europe-west1 \
+                   --project ${PROJECT_ID} --format='value(status.url)')
+          echo "=============================================================="
+          echo "Revisión desplegada SIN tráfico. Pruébala aquí:"
+          echo "  https://${_CANARY_TAG}---$${BASE#https://}"
+          echo "Cuando convenza:  ./scripts/deploy.sh promote ${_ENV}"
+          echo "=============================================================="
+        fi
     waitFor: ['Push-Backend-Image']
 
   # -------------------------------------------------------------------------------------
-  # PASO 2: Instalar Firebase Tools
+  # 3. Frontend: panel de administración (React) — el widget de chat es estático
   # -------------------------------------------------------------------------------------
-  - name: 'node:18'
-    id: 'Install-Firebase-Tools'
-    entrypoint: 'npm'
-    args: ['install', 'firebase-tools']
-
-  # -------------------------------------------------------------------------------------
-  # PASO 3: Construir el Frontend (Admin Panel)
-  # -------------------------------------------------------------------------------------
-  - name: 'gcr.io/cloud-builders/npm'
-    id: 'Install-Admin-Panel-Dependencies'
-    args: ['install']
-    dir: 'public/admin-panel'
-
   - name: 'gcr.io/cloud-builders/npm'
     id: 'Build-Admin-Panel'
-    args: ['run', 'build']
+    entrypoint: 'bash'
     dir: 'public/admin-panel'
-    waitFor: ['Install-Admin-Panel-Dependencies']
+    waitFor: ['-']            # en paralelo con el backend
+    args:
+      - '-c'
+      - |
+        set -euo pipefail
+        if [ "${_TRAFFIC}" != "latest" ]; then
+          echo "Modo canary: el panel no se compila (no se despliega hosting)."
+          exit 0
+        fi
+        # `npm ci` exige que package.json y package-lock.json estén sincronizados, y
+        # hoy no lo están (typescript 5.8.3 en el lock frente a 4.9.5 en package.json).
+        # Se intenta la vía reproducible y se cae a `npm install` si falla.
+        npm ci || { echo "AVISO: package-lock.json desincronizado; usando npm install"; npm install; }
+        npm run build
 
   # -------------------------------------------------------------------------------------
-  # PASO 4: Desplegar el Frontend en Firebase Hosting
-  # TODO: migrar a FIREBASE_CI_TOKEN (ver comentario en README).
-  # allowFailure: true → el backend se despliega aunque Firebase falle.
+  # 4. Firebase Hosting. En canary NO se despliega: el frontend iría al 100% de usuarios
+  #    mientras el backend nuevo todavía no recibe tráfico, y quedarían descompasados.
   # -------------------------------------------------------------------------------------
   - name: 'node:18'
-    id: 'Deploy-Frontend-to-Firebase'
-    entrypoint: './node_modules/.bin/firebase'
+    id: 'Deploy-Hosting'
+    entrypoint: 'bash'
     args:
-      - 'deploy'
-      - '--project'
-      - '${_FIREBASE_PROJECT_ALIAS}'
-      - '--only'
-      - 'hosting'
-      - '--force'
-    allowFailure: true
-    waitFor: ['Install-Firebase-Tools', 'Build-Admin-Panel']
+      - '-c'
+      - |
+        set -euo pipefail
+        if [ "${_TRAFFIC}" != "latest" ]; then
+          echo "Modo canary: hosting NO se despliega (evita descompasar frontend y backend)."
+          exit 0
+        fi
+        npm install --no-save firebase-tools
+        ./node_modules/.bin/firebase deploy --only hosting \
+          --project ${_FIREBASE_PROJECT_ALIAS} --non-interactive --force
+    waitFor: ['Deploy-Backend', 'Build-Admin-Panel']
+    dir: '.'
 
 # =====================================================================================
-# Variables con valores por defecto para producción
+# Valores por defecto: entorno DEV, que es el entorno vivo, y despliegue CANARY,
+# que es el que no puede romper nada. Producción exige pasarlos explícitamente.
 # =====================================================================================
 substitutions:
-  _SERVICE_NAME: 'orchestrator'
-  _FIREBASE_PROJECT_ALIAS: 'prod'
+  _ENV: 'dev'
+  _SERVICE_NAME: 'orchestrator-dev'
+  _FIREBASE_PROJECT_ALIAS: 'dev'
+  _TRAFFIC: 'canary'
+  _CANARY_TAG: 'canary'
+  _EMBEDDING_MODEL: 'sentence-transformers/all-MiniLM-L6-v2'
+  _NEO4J_URI: 'neo4j+s://273d9982.databases.neo4j.io'
+  _NEO4J_USER: '273d9982'
+  _NEO4J_DB: '273d9982'
 
 images:
   - 'europe-west1-docker.pkg.dev/${PROJECT_ID}/cloud-run-source-deploy/${_SERVICE_NAME}:latest'
+  - 'europe-west1-docker.pkg.dev/${PROJECT_ID}/cloud-run-source-deploy/${_SERVICE_NAME}:${SHORT_SHA}'
 
 options:
   defaultLogsBucketBehavior: REGIONAL_USER_OWNED_BUCKET
+  dynamicSubstitutions: true

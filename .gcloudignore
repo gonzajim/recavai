@@ -1,0 +1,31 @@
+# Qué NO se sube a Cloud Build. Sin esto se subirían el entorno virtual (~2 GB con
+# torch) y node_modules, haciendo el despliegue lentísimo.
+.git/
+.gitignore
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+
+node_modules/
+public/admin-panel/node_modules/
+functions/node_modules/
+
+# Secretos y artefactos locales
+.env
+.firebase/
+firestore-debug.log
+results/
+benchmarks/baseline.jsonl
+benchmarks/run_*.jsonl
+
+# Material que no forma parte de la imagen
+paper/
+docs/
+benchmarks/smoke/
+*.md
+!requirements.txt
+bubble_tmp.bin
+temp.js
+test_api.ps1
+test.orchestrator.http

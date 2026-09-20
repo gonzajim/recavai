@@ -19,10 +19,15 @@ WORKDIR /app-build
 
 # --- Capa 1: torch CPU-only (pesada, raramente cambia) ---
 # --index-url fuerza CPU wheels del servidor de PyTorch (~200MB vs ~532MB CUDA en PyPI).
+# --extra-index-url PyPI: el índice de PyTorch no aloja paquetes de build-backend
+# (p.ej. flit_core, requerido por typing_extensions cuando no hay wheel disponible
+# para esa combinación exacta de versión/plataforma) — sin esto, pip falla al no
+# poder resolver esa dependencia transitiva de compilación.
 # Capa separada: si requirements.txt cambia, esta capa sigue cacheada.
 RUN python3 -m venv /opt/venv && \
     /opt/venv/bin/pip install --no-cache-dir torch \
-      --index-url https://download.pytorch.org/whl/cpu
+      --index-url https://download.pytorch.org/whl/cpu \
+      --extra-index-url https://pypi.org/simple
 
 # --- Capa 2: resto de dependencias (cambia con más frecuencia) ---
 COPY requirements.txt requirements.txt
