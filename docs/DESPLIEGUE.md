@@ -125,3 +125,39 @@ Los secretos se inyectan desde Secret Manager en el despliegue (`--update-secret
 | `EMBEDDING_MODEL_NAME` | Sustitución | **Debe coincidir con el modelo que construyó el índice** |
 | `NEO4J_URI`, `NEO4J_USERNAME`, `NEO4J_DATABASE` | Sustitución | |
 | `CORS_ORIGINS` | Opcional | Si falta, se usa la lista segura por defecto |
+
+## 7. Diagnosticar un problema con los logs
+
+```bash
+./scripts/logs.sh resumen        # peticiones, códigos, latencias y errores de 24 h
+./scripts/logs.sh errors         # solo errores y trazas
+./scripts/logs.sh tail           # en vivo
+./scripts/logs.sh auditor        # registros, cierres y veredictos del auditor
+./scripts/logs.sh rag            # enrutado y recuperación
+./scripts/logs.sh slow 5000      # peticiones de más de 5 s
+./scripts/logs.sh req  7e3287bd68d1                              # una petición
+./scripts/logs.sh thread d839f31f-4e8f-4583-9d2c-b72623dd13b5    # una conversación
+./scripts/logs.sh consola        # enlace al visor web con el filtro puesto
+```
+
+### Cómo seguir el rastro de un problema concreto
+
+Cada respuesta del backend lleva la cabecera **`X-Request-Id`**. Si alguien reporta un fallo, pídele esa cabecera (se ve en la pestaña Red de las herramientas de desarrollo) y con `./scripts/logs.sh req <id>` sale todo lo que ocurrió en esa petición.
+
+Si no la tienes, sirve el `thread_id` de la conversación, que aparece en la propia respuesta de la API y en el panel de experto. `./scripts/logs.sh thread <id>` reconstruye la conversación entera: qué turnos hubo, qué preguntas se registraron, qué veredictos se emitieron y dónde falló.
+
+### Qué significan las líneas del auditor
+
+```
+record_block_answers: thread=abc block=block_1 +3 -> 3/6 verdict=—
+```
+Se registraron 3 respuestas, el bloque va por 3 de 6 obligatorias, y no hubo veredicto porque las preguntas del bloque 1 son de perfil y no se verifican. Un `verdict=no cumple` indica que el asesor detectó una brecha.
+
+```
+complete_audit_block RECHAZADO: thread=abc block=block_1 3/6
+```
+El modelo intentó cerrar un bloque a medias y el servidor se lo impidió. **Esto es el sistema funcionando**, no un error.
+
+### Limitación conocida del registro
+
+Cuando Gemini devuelve una respuesta sin contenido, el log dice `Could not extract text from Gemini response` pero **no registra el `finish_reason`**, que es justo el dato que diría por qué: límite de tokens agotado por el razonamiento interno, filtro de seguridad, u otra causa. Mientras no se añada, ese fallo no es diagnosticable del todo.
