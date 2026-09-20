@@ -54,8 +54,14 @@ canary_url() {
 case "$ACTION" in
   canary)
     say "Construyendo y desplegando SIN tráfico en $PROJECT/$SERVICE"
+    # SHORT_SHA es una variable "built-in" de Cloud Build: solo se rellena sola
+    # cuando el build viene de un trigger conectado a un repo. Aquí se lanza desde
+    # un directorio local con `gcloud builds submit`, así que hay que pasarla a
+    # mano o cloudbuild.yaml genera un tag de imagen vacío ("...orchestrator-dev:")
+    # y el build falla con "invalid image name".
+    SHORT_SHA="$(git rev-parse --short HEAD)"
     gcloud builds submit --config=cloudbuild.yaml --project="$PROJECT" \
-      --substitutions="_ENV=$ENVIRONMENT,_SERVICE_NAME=$SERVICE,_FIREBASE_PROJECT_ALIAS=$FIREBASE_ALIAS,_TRAFFIC=canary,_CANARY_TAG=$TAG"
+      --substitutions="_ENV=$ENVIRONMENT,_SERVICE_NAME=$SERVICE,_FIREBASE_PROJECT_ALIAS=$FIREBASE_ALIAS,_TRAFFIC=canary,_CANARY_TAG=$TAG,SHORT_SHA=$SHORT_SHA"
     say "URL de prueba (no la ve ningún usuario):"
     canary_url
     cat <<'EOF'
