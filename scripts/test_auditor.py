@@ -243,6 +243,99 @@ def test_contexto_inicial():
     check("lista las 6 obligatorias", ctx.count("▸ (block_1_q") == 6)
 
 
+# =============================================================================
+class _FR:
+    def __init__(self, n): self.name = n
+
+
+class _Part:
+    def __init__(self, t=None): self.text = t
+
+
+class _Cand:
+    def __init__(self, parts, fr):
+        self.content = type("C", (), {"parts": parts})()
+        self.finish_reason = _FR(fr)
+        self.safety_ratings = []
+
+
+class _Usage:
+    prompt_token_count = 15000
+    candidates_token_count = 0
+    thoughts_token_count = 8192
+    total_token_count = 23192
+
+
+class FakeResponse:
+    """Respuesta de Gemini simulada. parts=None reproduce el fallo real de 2026-09-20."""
+    def __init__(self, parts, finish_reason="STOP", function_calls=None):
+        self.candidates = [_Cand(parts, finish_reason)]
+        self.function_calls = function_calls or []
+        self.usage_metadata = _Usage()
+        self.prompt_feedback = None
+
+    @property
+    def text(self):
+        parts = self.candidates[0].content.parts
+        if parts is None:
+            raise ValueError("sin parts")
+        return "".join(p.text or "" for p in parts)
+
+
+def _client(*responses):
+    """Cliente falso que devuelve las respuestas dadas, una por llamada."""
+    calls = []
+
+    class Models:
+        @staticmethod
+        def generate_content(**kw):
+            calls.append(kw)
+            r = responses[min(len(calls) - 1, len(responses) - 1)]
+            if isinstance(r, Exception):
+                raise r
+            return r
+
+    return type("Cliente", (), {"models": Models}), calls
+
+
+def test_respuesta_vacia():
+    """Gemini devolvió una respuesta sin contenido en producción el 20/09/2026 y el
+    usuario vio un error. Estas comprobaciones cubren el diagnóstico y el reintento."""
+    print("\nRespuestas vacías de Gemini")
+    from google.genai import types as gtypes
+
+    vacia = FakeResponse(None, "MAX_TOKENS")
+    buena = FakeResponse([_Part("Respuesta del modelo.")])
+
+    d = gs._diagnose(vacia)
+    check("el diagnóstico captura finish_reason", d.get("finish_reason") == "MAX_TOKENS")
+    check("y los tokens de razonamiento", d.get("tokens_razonamiento") == 8192)
+
+    cli, calls = _client(buena)
+    gs._generate(cli, contents=[], config=gtypes.GenerateContentConfig(), label="t")
+    check("con texto no reintenta", len(calls) == 1)
+
+    cli, calls = _client(vacia, buena)
+    r = gs._generate(cli, contents=[], config=gtypes.GenerateContentConfig(), label="t")
+    check("vacía -> reintenta y recupera", gs._text_of(r) == "Respuesta del modelo.")
+    check("el reintento desactiva el razonamiento",
+          len(calls) == 2 and calls[1]["config"].thinking_config.thinking_budget == 0)
+    check("y fija el presupuesto de salida",
+          calls[1]["config"].max_output_tokens == gs._MAX_OUTPUT_TOKENS)
+
+    cli, calls = _client(vacia, vacia)
+    msg = gs._extract_text(gs._generate(cli, contents=[], config=gtypes.GenerateContentConfig(), label="t"))
+    check("dos vacías -> mensaje accionable al usuario", "Vuelve a enviarme" in msg)
+
+    cli, calls = _client(FakeResponse(None, "STOP", function_calls=[object()]))
+    gs._generate(cli, contents=[], config=gtypes.GenerateContentConfig(), label="t")
+    check("con llamada a herramienta no reintenta", len(calls) == 1)
+
+    cli, calls = _client(vacia, RuntimeError("cuota agotada"))
+    r = gs._generate(cli, contents=[], config=gtypes.GenerateContentConfig(), label="t")
+    check("si el reintento falla, degrada sin excepción", r is not None and len(calls) == 2)
+
+
 if __name__ == "__main__":
     print("Pruebas offline del auditor")
     test_catalogo()
@@ -250,6 +343,7 @@ if __name__ == "__main__":
     test_verificacion_normativa()
     test_bloque_activo()
     test_contexto_inicial()
+    test_respuesta_vacia()
     print()
     if FAILURES:
         print(f"\033[31m{len(FAILURES)} comprobación(es) fallida(s):\033[0m")

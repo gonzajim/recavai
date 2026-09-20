@@ -21,6 +21,11 @@ from src.context_orchestrator import search_hybrid
 
 _GEMINI_MODEL = "gemini-2.5-flash"
 
+# Presupuesto de salida explícito. Sin fijarlo se depende del valor por defecto del
+# modelo, y en Gemini 2.5 el razonamiento interno consume de ese mismo presupuesto:
+# si se agota, la respuesta llega SIN contenido y el usuario ve un error.
+_MAX_OUTPUT_TOKENS = 8192
+
 # Context window budget per model (chars, with 0.90 safety factor applied)
 _CONTEXT_BUDGET: dict[str, int] = {
     "gemini-2.5-flash":      180_000,
@@ -207,17 +212,15 @@ def chat_with_auditor(
         system_instruction=system,
         tools=[AUDITOR_TOOLS],
         tool_config=_AUDITOR_TOOL_CONFIG,
+        max_output_tokens=_MAX_OUTPUT_TOKENS,
     )
 
     # Un turno normal encadena record_block_answers → complete_audit_block → (consulta al
     # experto). 8 rondas dan margen para eso más un reintento tras un cierre rechazado.
     max_rounds = 8
     for _ in range(max_rounds):
-        response = genai_client.models.generate_content(
-            model=_GEMINI_MODEL,
-            contents=contents,
-            config=config,
-        )
+        response = _generate(genai_client, contents=contents, config=config,
+                             label="auditor", thread_id=thread_id)
 
         if not response.function_calls:
             break
@@ -267,13 +270,13 @@ def chat_with_expert(
         types.Content(role="user", parts=[types.Part(text=augmented_message)])
     ]
 
-    config = types.GenerateContentConfig(system_instruction=EXPERT_SYSTEM_PROMPT)
-
-    response = genai_client.models.generate_content(
-        model=_GEMINI_MODEL,
-        contents=contents,
-        config=config,
+    config = types.GenerateContentConfig(
+        system_instruction=EXPERT_SYSTEM_PROMPT,
+        max_output_tokens=_MAX_OUTPUT_TOKENS,
     )
+
+    response = _generate(genai_client, contents=contents, config=config,
+                         label="asesor", thread_id=thread_id)
     return _extract_text(response), sources
 
 
@@ -752,16 +755,103 @@ def _build_rag_message(
     return augmented, sources
 
 
-def _extract_text(response) -> str:
+def _diagnose(response) -> dict:
+    """Por qué una respuesta vino vacía. Sin esto, 'Could not extract text' no dice nada:
+    no distingue entre presupuesto de salida agotado por el razonamiento interno, filtro
+    de seguridad o cualquier otra causa."""
+    d: dict = {}
     try:
-        text = response.text
-        if text:
-            return text.strip()
-    except Exception:
+        cand = (response.candidates or [None])[0]
+        if cand is not None:
+            fr = getattr(cand, "finish_reason", None)
+            d["finish_reason"] = getattr(fr, "name", None) or str(fr)
+            content = getattr(cand, "content", None)
+            parts = getattr(content, "parts", None) if content is not None else None
+            d["n_parts"] = len(parts) if parts else 0
+            ratings = getattr(cand, "safety_ratings", None)
+            blocked = [getattr(r.category, "name", str(r.category))
+                       for r in (ratings or []) if getattr(r, "blocked", False)]
+            if blocked:
+                d["safety_blocked"] = blocked
+    except Exception:                                    # noqa: BLE001
+        d["finish_reason"] = "desconocido"
+    try:
+        um = getattr(response, "usage_metadata", None)
+        if um is not None:
+            d["tokens_prompt"] = getattr(um, "prompt_token_count", None)
+            d["tokens_salida"] = getattr(um, "candidates_token_count", None)
+            d["tokens_razonamiento"] = getattr(um, "thoughts_token_count", None)
+            d["tokens_total"] = getattr(um, "total_token_count", None)
+    except Exception:                                    # noqa: BLE001
         pass
     try:
-        parts = response.candidates[0].content.parts
-        return "\n".join(p.text for p in parts if hasattr(p, "text") and p.text).strip()
-    except Exception:
-        logger.error("Could not extract text from Gemini response", exc_info=True)
-        return "No se pudo obtener una respuesta del modelo."
+        pf = getattr(response, "prompt_feedback", None)
+        br = getattr(pf, "block_reason", None) if pf is not None else None
+        if br:
+            d["prompt_block_reason"] = getattr(br, "name", None) or str(br)
+    except Exception:                                    # noqa: BLE001
+        pass
+    return d
+
+
+def _text_of(response) -> str | None:
+    """Texto de la respuesta, o None si no trae ninguno."""
+    try:
+        text = response.text
+        if text and text.strip():
+            return text.strip()
+    except Exception:                                    # noqa: BLE001
+        pass
+    try:
+        parts = response.candidates[0].content.parts or []
+        joined = "\n".join(p.text for p in parts if getattr(p, "text", None)).strip()
+        return joined or None
+    except Exception:                                    # noqa: BLE001
+        return None
+
+
+def _generate(genai_client, *, contents, config, label: str, thread_id: str | None = None):
+    """Llama al modelo y, si la respuesta viene sin texto ni llamadas a herramientas,
+    lo registra con su causa y reintenta UNA vez sin razonamiento interno.
+
+    El reintento no es un capricho: cuando `finish_reason` es MAX_TOKENS, lo habitual en
+    Gemini 2.5 es que el presupuesto de salida se lo haya comido el razonamiento y no
+    quede nada para la respuesta. Con thinking_budget=0 todo el presupuesto va al texto.
+    """
+    response = genai_client.models.generate_content(
+        model=_GEMINI_MODEL, contents=contents, config=config,
+    )
+    if _text_of(response) or response.function_calls:
+        return response
+
+    diag = _diagnose(response)
+    logger.error("Respuesta vacía de Gemini [%s] thread=%s: %s", label, thread_id, diag)
+
+    try:
+        retry_config = config.model_copy(deep=True)
+        retry_config.thinking_config = types.ThinkingConfig(thinking_budget=0)
+        if not getattr(retry_config, "max_output_tokens", None):
+            retry_config.max_output_tokens = _MAX_OUTPUT_TOKENS
+        retry = genai_client.models.generate_content(
+            model=_GEMINI_MODEL, contents=contents, config=retry_config,
+        )
+    except Exception:                                    # noqa: BLE001
+        logger.error("El reintento sin razonamiento falló [%s]", label, exc_info=True)
+        return response
+
+    if _text_of(retry) or retry.function_calls:
+        logger.info("Reintento sin razonamiento OK [%s] thread=%s", label, thread_id)
+        return retry
+
+    logger.error("Reintento también vacío [%s] thread=%s: %s",
+                 label, thread_id, _diagnose(retry))
+    return retry
+
+
+def _extract_text(response) -> str:
+    text = _text_of(response)
+    if text:
+        return text
+    logger.error("Sin texto en la respuesta de Gemini: %s", _diagnose(response))
+    return ("No he podido generar la respuesta en este intento. "
+            "Vuelve a enviarme tu último mensaje, por favor.")
