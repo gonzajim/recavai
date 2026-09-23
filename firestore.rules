@@ -1,9 +1,19 @@
-// Allow everything while probando en local
+// Todo el acceso a Firestore pasa por el orquestador, que usa el Admin SDK y por
+// tanto no está sujeto a estas reglas. Ningún cliente habla directamente con la base
+// de datos, así que la regla correcta es denegar todo acceso directo.
+//
+// Esto es lo que está publicado en producción desde 2025-10-19 (ruleset cbe2190d).
+// Hasta 2026-09-23 este fichero decía `if true` —un resto de pruebas en local que
+// nunca llegó a desplegarse—, de modo que un `firebase deploy --only firestore:rules`
+// desde una copia limpia del repositorio habría abierto la base de datos al mundo.
+// Si se necesita acceso directo desde el cliente, hay que escribir reglas por
+// colección, no relajar esta.
 rules_version = '2';
+
 service cloud.firestore {
   match /databases/{database}/documents {
     match /{document=**} {
-      allow read, write: if true;
+      allow read, write: if false;
     }
   }
 }
