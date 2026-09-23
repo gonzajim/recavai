@@ -72,7 +72,7 @@ La fidelidad sigue baja en todas las configuraciones: es un problema de generaci
 | 1 | Documento correcto ≥ A y artículo exacto +10 pts | **cumple** (+26 y +38) |
 | 2 | Ningún tipo con ≥ 5 preguntas empeora en más de 1 | **cumple** |
 | 3 | Ninguna invención nueva en las trampas | **cumple** (B58 mejora; B60 falla en ambas) |
-| 4 | El juez prefiere la nueva al menos tanto como la vieja y la fidelidad no baja | **cumple** (42–17) |
+| 4 | El juez prefiere la nueva al menos tanto como la vieja y la fidelidad no baja | **cumple** (43–15; contexto real 132–28) |
 | 5 | Latencia p95 no sube más de 500 ms | **indeterminada**: +1,3 s, IC [−0,9; +4,1] s; el ruido (A vs A2) es [−1,8; +3,1] s. Por pregunta, mediana +340 ms. La búsqueda añade 22 ms; el resto es generación con un 70 % más de contexto |
 
 ## Hallazgos del día que no estaban en el plan
@@ -84,8 +84,8 @@ La fidelidad sigue baja en todas las configuraciones: es un problema de generaci
   recuperaba el glosario en vez del artículo aplicable, en v1 y en v2. Es la razón de
   que A gane 3 de 4 comprobaciones del auditor en la comparación por parejas. Corregido
   (`build_verification_retrieval_query`): con la corrección, la búsqueda encuentra el
-  art. 7, 15 y 16 de la CSDDD y el 100 % de las fuentes. **Falta medir las respuestas**
-  (sin crédito de Gemini).
+  art. 7, 15 y 16 de la CSDDD y el 100 % de las fuentes, y las 4 respuestas pasan a ser
+  fieles y citar el artículo correcto (antes 1 de 4).
 - **Referencia explícita.** Los vectores no distinguen números («artículo 9» traía los
   arts. 2, 3 y 38). El grafo resuelve «artículo N de la CSDDD», «E1-6», «GRI 305-1».
   Se añadió **después** de ver la batería: 13 de sus 60 preguntas nombran una unidad;
