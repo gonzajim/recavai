@@ -124,8 +124,8 @@ pareado, Wilcoxon y Holm, e interacción de H1.2).
 ## Interpretación rápida
 
 - `hit@k` bajo (<0.7) → el corpus no contiene bien la evidencia o el chunking la
-  fragmenta demasiado (es el caso esperado del índice actual: mediana de 2
-  palabras por chunk).
+  fragmenta demasiado. No es el caso del índice actual: medido el 23/09/2026
+  cubre el 98,4 % del texto con mediana de 95 palabras por fragmento.
 - `recall@k` alto pero `mrr` bajo → se recupera lo relevante pero muy abajo →
   hace falta re-ranking.
 - `groundedness` alto y `correctness` bajo → el modelo cita bien pero el corpus

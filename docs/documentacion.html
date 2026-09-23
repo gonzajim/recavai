@@ -460,7 +460,8 @@
 
       <div class="panel">
         <span class="panel-label">Hallazgo medido, no estimado</span>
-        <p>Al inspeccionar el índice de producción se comprobó que hay <strong>un vector por bloque de maquetación</strong>, con una mediana de dos palabras por fragmento: el 79 % tiene cinco palabras o menos. No hay agregación semántica. Los campos <code>entities</code> y <code>triplets</code> existen en el esquema pero están vacíos. El script que generó ese índice no está en el repositorio, en ninguna rama ni en el historial.</p>
+        <p>Medido el 23 de septiembre de 2026 sobre los 9.176 vectores del índice: contienen el <strong>98,4 % del texto del corpus</strong>, con una mediana de 95 palabras por fragmento. El 63 % de los fragmentos tiene 50 palabras o más y entre todos reúnen el 94 % del texto; los fragmentos diminutos existen (un 11 % tiene cinco palabras o menos) pero apenas aportan el 0,1 %. Es decir: el índice cubre el corpus.</p>
+        <p style="margin-top:.6rem">Lo que sí es cierto es que los campos <code>entities</code> y <code>triplets</code> están vacíos pese a declararse en el esquema, y que <strong>el script que generó el índice no está en el repositorio</strong>, en ninguna rama ni en el historial: el índice no se puede reproducir.</p>
       </div>
 
       <p>Ese hallazgo motivó dos piezas nuevas, ambas <em>fuera</em> del servicio en línea:</p>
@@ -637,8 +638,8 @@
         </div></div>
 
         <div class="debt-item"><div class="sev sev-md"></div><div class="debt-body">
-          <b>El corpus está troceado por bloques de maquetación</b>
-          <p>Mediana de dos palabras por vector. Explica buena parte de la distancia entre acertar el documento (0,80) y acertar documento y página (0,65). El pipeline de sustitución ya está escrito y probado, pero el corpus no se ha reindexado.</p>
+          <b>El índice de producción no se puede reproducir</b>
+          <p>El script que lo generó no está en el repositorio, en ninguna rama ni en el historial. El índice cubre el corpus (98,4 % del texto, mediana de 95 palabras por fragmento), así que no es urgente reindexar, pero nadie puede reconstruirlo ni explicar con qué criterio se troceó. El pipeline de sustitución está escrito y probado.</p>
           <span class="debt-meta">índice uclm-corpus-roma · corpus_pipeline.py listo para ejecutar</span>
         </div></div>
 

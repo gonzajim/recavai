@@ -37,7 +37,7 @@ Firebase Auth permite exportar e importar usuarios **con sus contraseñas**, per
 Firestore (hilos, mensajes, progreso de auditoría, metadatos de documentos) y BigQuery (histórico de turnos). El histórico de BigQuery tiene valor para el panel de experto; los hilos de Firestore, menos. Se puede migrar solo BigQuery.
 
 **1.4 ¿Un índice de Pinecone o dos?**
-Hoy hay uno (`uclm-corpus-roma`) y lo comparten todos. Separar dev y prod de verdad implica dos índices y reindexar, que es justo lo que hará el pipeline nuevo. Aprovechar la migración para reindexar con `corpus_pipeline.py` mata dos pájaros, pero **exige pasar antes el benchmark**: el corpus actual tiene mediana de dos palabras por fragmento y el reindexado cambia la calidad de las respuestas.
+Hoy hay uno (`uclm-corpus-roma`) y lo comparten todos. Separar dev y prod de verdad implica dos índices y reindexar, que es justo lo que hará el pipeline nuevo. Aprovechar la migración para reindexar con `corpus_pipeline.py` mata dos pájaros, pero **exige pasar antes el benchmark**: reindexar cambia la calidad de las respuestas y hay que medir el antes y el después.
 
 **1.5 Facturación**
 El proyecto vivo se está facturando hoy a la cuenta **«Alfonso»** (`0131EB-A0BD56-558557`), no a la cuenta **«recava»** (`014698-82BF02-E0EF64`), que está abierta. Los proyectos nuevos deberían nacer ya en la cuenta correcta. Conviene aclarar por qué está así antes de replicarlo.

@@ -20,7 +20,7 @@ Este documento acompaña a `linea1_kb_construction_es_regulatory_rag.md`. Explic
 
 **Decisión importante: §1.5 "On novelty".** Tu propio análisis de riesgos dice: *"el chunking semántico ya está inventado; la novedad tiene que estar en el estudio controlado y en el dominio, no en el método. Hay que decirlo así en el paper."* Lo he dicho exactamente así, en una subsección propia. Un revisor que lea eso no puede acusarte de vender un método viejo como nuevo; te está diciendo de antemano dónde buscar el valor.
 
-**Qué te queda.** Confirmar los datos del despliegue original que cito (índice con mediana de 2 palabras por bloque; línea base hit@k 0,80 / recall@k 0,65). Son los que medimos en septiembre; si reindexas antes de enviar, actualízalos.
+**Qué te queda.** OJO: la afirmación de que el índice tenía «mediana de 2 palabras por bloque» NO se sostuvo al volver a medirlo el 23/09/2026 (mediana real: 95 palabras, 98,4 % del corpus indexado). El artículo ya no puede apoyarse en la fragmentación del índice como motivación; la motivación válida sigue siendo la ausencia de estudio controlado sobre corpus regulatorio europeo en español y la evaluación a nivel de artículo. Confirma también la línea base hit@k 0,80 / recall@k 0,65 antes de enviar.
 
 ---
 

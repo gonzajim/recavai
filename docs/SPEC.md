@@ -473,7 +473,7 @@ max_rounds            = 6      # tool-call loop cap
 |---|---|---|---|---|
 | `DEBT-1` | high | Firestore rules grant `read, write: if true` to everyone, labelled as a local-testing placeholder | `firestore.rules` | `INV-2`, `SEC-3` |
 | `DEBT-2` | high | `/admin/ingest_document` authorises with `require_firebase_user_or_403`, not `require_admin_or_403`; any verified user can write to the global corpus | `app.py` | `API-ADM-1`, `DATA-PC-3` |
-| `DEBT-3` | medium | Production corpus is chunked per layout block (median 2 words/chunk, 79 % ≤ 5 words); `entities`/`triplets` empty; generating script absent from the repo | Pinecone `uclm-corpus-roma` | — |
+| `DEBT-3` | low | The script that generated the production index is absent from the repo (any branch or history), so the index cannot be reproduced; `entities`/`triplets` are empty although the schema declares them. Measured 2026-09-23: 9,176 vectors, 98.4 % of corpus text indexed, median 95 words/vector — the index is **not** pathologically fragmented, contrary to what this entry claimed until that date | Pinecone `uclm-corpus-roma` | — |
 | `DEBT-4` | medium | English monolingual embedding model over a Spanish corpus | `src/config.py` | `ARC-3` (locked-in) |
 | `DEBT-5` | medium | User-PDF chunks carry no page number (pages flattened before windowing) | `src/rag_service.py` | `RAG-10` |
 | `DEBT-6` | medium | Deployed chat widget predates HEAD; the login-failure visibility fix is not live | `public/chatbot/` | `UI-6` |
