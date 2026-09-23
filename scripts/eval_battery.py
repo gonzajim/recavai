@@ -36,6 +36,9 @@ Uso:
   python scripts/eval_battery.py pairwise A CG        # juez a ciegas, respuesta contra respuesta
   python scripts/eval_battery.py run --name realA --queries data/real_queries.jsonl --no-generate ...
   python scripts/eval_battery.py pairwise realA realCG --context   # contexto contra contexto
+  python scripts/eval_battery.py rejudge A --fragments-from A_busqueda --judge-model gemini-3.5-flash --out A.j35
+      (vuelve a juzgar respuestas ya generadas con otro juez; todas las configuraciones que se
+       comparan tienen que pasar por el MISMO juez)
 """
 from __future__ import annotations
 
@@ -304,16 +307,21 @@ def run_item(item, gs, embed, index, genai_client, captured, judge_model, genera
     rec = {"id": item["id"], "tipo": item["tipo"], "pregunta": item["pregunta"]}
     t0 = time.time()
     try:
+        retrieval_query = None
         if item["modo"] == "auditor":
             escenario = re.sub(r"\s*¿Cumple con la normativa\?\s*$", "", item["pregunta"]).strip()
-            query = gs.build_verification_query(
-                ["¿Cumple la empresa con la normativa aplicable en este aspecto?"], escenario)
+            preguntas = ["¿Cumple la empresa con la normativa aplicable en este aspecto?"]
+            query = gs.build_verification_query(preguntas, escenario)
+            # igual que _verify_compliance, si el servicio ya separa búsqueda e instrucciones
+            if hasattr(gs, "build_verification_retrieval_query"):
+                retrieval_query = gs.build_verification_retrieval_query(preguntas, escenario)
         else:
             query = item["pregunta"]
+        kw = {"retrieval_query": retrieval_query} if retrieval_query else {}
         if generate:
-            answer, _sources = gs.chat_with_expert(genai_client, embed, index, [], query)
+            answer, _sources = gs.chat_with_expert(genai_client, embed, index, [], query, **kw)
         else:
-            gs._build_rag_message(embed, index, query)
+            gs._build_rag_message(embed, index, query, **kw)
             answer = ""
     except Exception as e:                            # noqa: BLE001
         rec["error"] = f"{type(e).__name__}: {e}"
@@ -343,15 +351,7 @@ def run_item(item, gs, embed, index, genai_client, captured, judge_model, genera
         rec["veredicto"] = m.group(1).lower() if m else None
         rec["veredicto_ok"] = float(rec["veredicto"] == item["veredicto_esperado"])
 
-    j = judge(genai_client, judge_model, item, answer, docs)
-    rec["juez"] = j
-    if "hechos" in j:
-        n = max(1, len(item["hechos_clave"]))
-        val = {"presente": 1.0, "parcial": 0.5}
-        rec["cobertura"] = sum(val.get(h.get("estado"), 0.0) for h in j["hechos"]) / n
-        rec["fiel"] = float(not j.get("afirmaciones_no_soportadas") and not j.get("contradice_hechos"))
-        if item["debe_rechazar"]:
-            rec["rechazo_ok"] = float(bool(j.get("rechazo_correcto")))
+    score_judgement(rec, item, judge(genai_client, judge_model, item, answer, docs))
     return rec
 
 
@@ -567,6 +567,49 @@ def cmd_pairwise(a) -> None:
     print(f"\n→ {out}")
 
 
+def score_judgement(rec: dict, item: dict, j: dict) -> None:
+    rec["juez"] = j
+    for k in ("cobertura", "fiel", "rechazo_ok"):
+        rec.pop(k, None)
+    if "hechos" in j:
+        n = max(1, len(item["hechos_clave"]))
+        val = {"presente": 1.0, "parcial": 0.5}
+        rec["cobertura"] = sum(val.get(h.get("estado"), 0.0) for h in j["hechos"]) / n
+        rec["fiel"] = float(not j.get("afirmaciones_no_soportadas") and not j.get("contradice_hechos"))
+        if item["debe_rechazar"]:
+            rec["rechazo_ok"] = float(bool(j.get("rechazo_correcto")))
+
+
+def cmd_rejudge(a) -> None:
+    from dotenv import load_dotenv
+    load_dotenv(ROOT / ".env")
+    from google import genai
+    client = genai.Client(api_key=os.environ["GEMINI_API_KEY"])
+    run = load_run(a.name)
+    frags = load_run(a.fragments_from) if a.fragments_from else run
+    items = {it["id"]: it for it in load_battery()}
+
+    def one(i):
+        rec = dict(run[i])
+        docs = frags[i]["recuperados"]
+        assert all("content" in d for d in docs), f"{i}: faltan los textos de los fragmentos"
+        if a.fragments_from:          # comprobación: la búsqueda repetida es la misma que se usó
+            same = [(d["title"], d["page"]) for d in docs] == [(d["title"], d["page"]) for d in run[i]["recuperados"]]
+            rec["fragmentos_identicos"] = same
+        score_judgement(rec, items[i], judge(client, a.judge_model, items[i], rec.get("respuesta") or "", docs))
+        return rec
+
+    with ThreadPoolExecutor(max_workers=a.workers) as ex:
+        out = list(ex.map(one, list(run)))
+    errs = sum(1 for r in out if "error" in (r.get("juez") or {}))
+    diff = sum(1 for r in out if r.get("fragmentos_identicos") is False)
+    with open(OUT / f"{a.out}.jsonl", "w", encoding="utf-8") as fh:
+        for r in out:
+            fh.write(json.dumps(r, ensure_ascii=False) + "\n")
+    print(f"{a.out}: {len(out)} juzgadas con {a.judge_model} · errores del juez {errs} · fragmentos distintos {diff}")
+    print_summary(a.out, out)
+
+
 def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     sub = ap.add_subparsers(dest="cmd", required=True)
@@ -591,8 +634,14 @@ def main() -> None:
     pw.add_argument("--context", action="store_true", help="comparar fragmentos recuperados, no respuestas")
     pw.add_argument("--judge-model", default="gemini-3.1-pro-preview")
     pw.add_argument("--workers", type=int, default=6)
+    rj = sub.add_parser("rejudge")
+    rj.add_argument("name")
+    rj.add_argument("--fragments-from", help="ejecución solo-búsqueda con los textos de los fragmentos")
+    rj.add_argument("--judge-model", required=True)
+    rj.add_argument("--out", required=True)
+    rj.add_argument("--workers", type=int, default=6)
     a = ap.parse_args()
-    {"run": cmd_run, "compare": cmd_compare, "pairwise": cmd_pairwise}[a.cmd](a)
+    {"run": cmd_run, "compare": cmd_compare, "pairwise": cmd_pairwise, "rejudge": cmd_rejudge}[a.cmd](a)
 
 
 if __name__ == "__main__":

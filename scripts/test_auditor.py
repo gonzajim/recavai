@@ -112,11 +112,16 @@ def check(name: str, condition: bool, detail: str = "") -> None:
         FAILURES.append(name)
 
 
+RETRIEVAL: list[str | None] = []
+
+
 def make_expert(verdict="no cumple", fail=False):
     calls: list[str] = []
 
-    def expert(_gc, _em, _pi, _hist, query, thread_id=None, local_store=None, uid=None):
+    def expert(_gc, _em, _pi, _hist, query, thread_id=None, local_store=None, uid=None,
+               retrieval_query=None):
         calls.append(query)
+        RETRIEVAL.append(retrieval_query)
         if fail:
             raise RuntimeError("asesor no disponible")
         return (f"VEREDICTO: {verdict}\nBRECHA: Canal solo para empleados.\n"
@@ -193,6 +198,9 @@ def test_verificacion_normativa():
     check("la consulta la construye el servidor con el texto del catálogo",
           "canal de denuncias" in calls[0].lower())
     check("la consulta incluye la respuesta del usuario", "plantilla" in calls[0])
+    rq = RETRIEVAL[-1] or ""
+    check("la búsqueda usa la respuesta del usuario", "plantilla" in rq)
+    check("la búsqueda NO lleva las instrucciones de formato", "VEREDICTO" not in rq and "EXACTAMENTE" not in rq)
     finding = (state(db, "block_4").get("findings") or [{}])[0]
     check("guarda el veredicto", finding.get("verdict") == "no cumple")
     check("ordena informar al usuario de la brecha", "DEBES informar al usuario" in r)

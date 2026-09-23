@@ -262,15 +262,21 @@ def chat_with_expert(
     thread_id: str | None = None,
     local_store=None,
     uid: str | None = None,
+    retrieval_query: str | None = None,
 ) -> tuple[str, list[dict]]:
     """
     Runs one advisor turn with RAG augmentation.
     Searches user's Pinecone namespace first (if uid provided), then global corpus.
     Returns (response_text, sources).
+
+    retrieval_query: texto con el que BUSCAR, si no es el mensaje entero. Lo usa el
+    verificador del auditor: su mensaje lleva instrucciones de formato que, embebidas,
+    dominaban el vector y hacían recuperar el glosario en lugar del artículo aplicable.
     """
     augmented_message, sources = _build_rag_message(
         embed_model, pinecone_index, user_message,
         thread_id=thread_id, local_store=local_store, uid=uid,
+        retrieval_query=retrieval_query,
     )
 
     contents: list = list(history) + [
@@ -403,12 +409,14 @@ def _verify_compliance(
     if not questions or not answer_text.strip():
         return None
 
-    query = build_verification_query([q.text for q in questions], answer_text)
+    texts = [q.text for q in questions]
+    query = build_verification_query(texts, answer_text)
 
     try:
         text, _sources = chat_with_expert(
             genai_client, embed_model, pinecone_index, [], query,
             thread_id=thread_id, local_store=None, uid=uid,
+            retrieval_query=build_verification_retrieval_query(texts, answer_text),
         )
     except Exception:
         logger.error("Verificación de cumplimiento fallida thread=%s block=%s",
@@ -423,6 +431,12 @@ def _verify_compliance(
         "assessment": (text or "").strip()[:2000],
         "at": datetime.now(timezone.utc).isoformat(),
     }
+
+
+def build_verification_retrieval_query(question_texts: list[str], answer_text: str) -> str:
+    """Lo que se BUSCA en el corpus al verificar: la sustancia (preguntas y respuesta), sin
+    las instrucciones de formato de build_verification_query."""
+    return " ".join(question_texts) + " " + answer_text.strip()
 
 
 def build_verification_query(question_texts: list[str], answer_text: str) -> str:
@@ -632,9 +646,11 @@ def _build_rag_message(
     local_store=None,
     model_name: str = _GEMINI_MODEL,
     uid: str | None = None,
+    retrieval_query: str | None = None,
 ) -> tuple[str, list[dict]]:
     """
     Retrieves relevant chunks and builds the augmented message for the LLM.
+    Busca con `retrieval_query` si se da; el mensaje al modelo lleva siempre `user_message`.
 
     Search order:
       1. User's Pinecone namespace (uid) — permanent uploaded files
@@ -644,7 +660,8 @@ def _build_rag_message(
     augmented_message prepends numbered excerpts so the model can cite [1]…[N].
     """
     char_budget = _CONTEXT_BUDGET.get(model_name, 180_000)
-    question_type = classify_question(user_message)
+    search_text = retrieval_query or user_message
+    question_type = classify_question(search_text)
     strategy = get_routing_strategy(question_type)
     logger.info(
         "RAG routing: question_type=%s strategy=%s model=%s budget=%d",
@@ -659,7 +676,7 @@ def _build_rag_message(
 
     try:
         # Always compute the embedding once — reused for both user-namespace and corpus search
-        embedding = generate_embedding(embed_model, user_message)
+        embedding = generate_embedding(embed_model, search_text)
 
         # 1. User's permanent files in their Pinecone namespace
         user_docs: list[dict] = []
@@ -679,7 +696,7 @@ def _build_rag_message(
         if pinecone_index is None:
             pine_docs: list[dict] = []
         else:
-            cat_filter = detect_category_filter(user_message)
+            cat_filter = detect_category_filter(search_text)
             pine_docs = search_documents(pinecone_index, embedding, metadata_filter=cat_filter)
             if cat_filter and not pine_docs:
                 logger.info("RAG: category filter returned 0 results, retrying without filter")
@@ -692,7 +709,7 @@ def _build_rag_message(
             if graph is not None:
                 # Unidades nombradas en la pregunta («artículo 9 de la CSDDD», «E1-6»): van
                 # delante, porque es lo que el usuario ha pedido literalmente.
-                direct = graph.explicit(pinecone_index, user_message, embedding, limit=_GRAPH_EXPAND)
+                direct = graph.explicit(pinecone_index, search_text, embedding, limit=_GRAPH_EXPAND)
                 if direct:
                     seen = {(d["title"], (d.get("content") or "")[:80]) for d in direct}
                     pine_docs = direct + [d for d in pine_docs
