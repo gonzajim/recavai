@@ -26,3 +26,4 @@ firestore-debug.log
 # Preguntas reales de usuarios (BigQuery): datos de usuarios, no van al repositorio.
 # Se regeneran con la consulta de docs/RAG_V2_RESULTADOS.md.
 data/real_queries.jsonl
+data/real_queries_holdout40.jsonl

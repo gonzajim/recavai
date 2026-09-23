@@ -58,3 +58,61 @@ Regla de decisión: [PREREGISTRO_FIDELIDAD.md](PREREGISTRO_FIDELIDAD.md), guarda
 ## Decisión
 
 Según la regla, **no se despliega tal cual**. Pendiente de decisión del responsable.
+
+---
+
+# Segunda ronda — juez con fragmentos, formato ajustado y validación con preguntas reales
+
+## 1. Juez por parejas que ve los fragmentos
+
+El juez anterior no veía los fragmentos y juzgaba con su propio conocimiento, anterior al
+Ómnibus. Nuevo criterio (`pairwise --with-context`): ve los fragmentos que tuvieron las dos
+respuestas (idénticos en las 60 preguntas), el texto consolidado prevalece sobre su memoria
+y un dato normativo sin respaldo cuenta en contra. **Es un cambio de instrumento hecho
+después de ver resultados, y el criterio favorece a propósito la respuesta fundamentada.**
+
+H3 contra v2: **gana H3 49, gana v2 8**, 3 empates (antes, sin fragmentos: 20–35).
+
+## 2. Formato ajustado (H4)
+
+De las 8 que perdía H3, 6 eran por estructura o exhaustividad. Habilidades
+`formato_asesor` v3, `fundamentacion` v2, `abstencion` v2 (commit `7323614`).
+
+| | v2 | H3 | **H4** |
+|---|---:|---:|---:|
+| Datos críticos sin respaldo / respuesta | 0,40 | 0,00 | **0,00** |
+| Sin afirmaciones no respaldadas | 33 % | 90 % | **90 %** |
+| Datos clave cubiertos | 67 % | 63 % | 63 % |
+| Cita el artículo esperado | 72 % | 68 % | **70 %** |
+| Trampas | 2/3 | 3/3 | **3/3** |
+| A ciegas con fragmentos, contra v2 | — | 49–8 | **52–6** |
+| Latencia p50 / p95 | 12,0 / 21,0 s | 6,9 / 13,7 s | 7,7 / 15,1 s |
+
+## 3. Validación con preguntas reales no usadas para diseñar
+
+40 preguntas reales de BigQuery, muestra aleatoria (semilla 2026) de las 226 que nunca se
+usaron para escribir las habilidades. Versión anterior al agente (commit `e3add68`, mismo
+índice y grafo) contra H4, juez con fragmentos:
+
+- **Gana la versión nueva 36, la anterior 4.**
+- Datos críticos sin respaldo por respuesta: **0,80 → 0,00**. La capa 3 reparó 1 respuesta.
+- 17 de 40 respuestas abren diciendo que algo no consta (antes, 0). Son en su mayoría
+  **abstenciones correctas**: los usuarios preguntan por el Estatuto de Roma, Núremberg,
+  Minas Gerais, delitos del Código Penal, la Ley 2/2023, la EUDR… que no están en el corpus
+  y que la versión anterior contestaba de memoria.
+- Las 4 que pierde: 2 saludos o preguntas sobre sus funciones («¿En qué puedes ayudarme?»
+  empezaba con «No se ha recuperado ningún fragmento…») y 2 encargos de redacción
+  (cláusulas contractuales, guía de auditoría paso a paso).
+
+**Corregido después:** los saludos y las preguntas sobre funciones (`identidad` v2 con las
+capacidades del producto; aviso de contexto vacío que no se menciona ante un saludo).
+Verificado solo con esas 3 preguntas; no se ha repetido la batería completa.
+
+**Pendiente (decisión de producto):** encargos de redacción. La versión nueva resume la
+norma en lugar de redactar la plantilla pedida.
+
+## Decisión
+
+Con el juez que ve los fragmentos, se cumplen las siete condiciones y la validación con
+preguntas reales lo confirma (36–4). Recomendación: desplegar como versión de prueba y
+promover.

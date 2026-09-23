@@ -268,8 +268,10 @@ class ContextoVacio:
             return []
         return [Finding(self.name, self.stage, "aviso",
                         "No se ha recuperado ningún fragmento de la base documental para esta "
-                        "pregunta. Dilo al principio. Puedes orientar en la sección de orientación "
-                        "práctica, sin cifras, fechas, artículos, números de norma ni obligaciones.")]
+                        "pregunta. Si es una pregunta sobre normativa, dilo al principio; puedes "
+                        "orientar en la sección de orientación práctica, sin cifras, fechas, artículos, "
+                        "números de norma ni obligaciones. Si es un saludo, un agradecimiento o una "
+                        "pregunta sobre lo que puedes hacer, responde con naturalidad y no menciones este aviso.")]
 
 
 class DatosCriticos:
