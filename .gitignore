@@ -21,3 +21,4 @@ bubble_tmp.bin
 temp.js
 firestore-debug.log
 *.ps1
+.cache/
