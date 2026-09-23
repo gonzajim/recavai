@@ -115,8 +115,8 @@ PY
     ;;
 
   test)
-    say "Pruebas offline del auditor (sin red, sin claves, sin Firestore)"
-    exec "$PY" scripts/test_auditor.py
+    say "Pruebas offline del auditor y del agente asesor (sin red, sin claves, sin Firestore)"
+    "$PY" scripts/test_auditor.py && exec "$PY" scripts/test_agent.py
     ;;
 
   *)

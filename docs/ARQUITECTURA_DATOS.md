@@ -1,11 +1,68 @@
 # Estado técnico de la capa de datos
 
-Medido el 2026-09-23 contra los sistemas vivos: la carpeta del corpus, el índice de
-Pinecone de producción y la instancia de Neo4j declarada en Cloud Run. No hay ninguna
-cifra estimada; todas salen de leer los 9.176 vectores uno a uno, de tokenizar su texto
+Dos fotografías del mismo día, el 2026-09-23:
+
+- **§0, el estado actual (índice v2)**, tras el cambio de modelo, troceado y grafo.
+- **§1-6, el estado anterior (índice v1)**, medido contra los sistemas vivos antes del
+  cambio. Se conserva porque documenta por qué se cambió, y porque el índice v1 sigue
+  existiendo para poder volver atrás.
+
+Ninguna cifra es estimada: salen de leer los vectores uno a uno, de tokenizar su texto
 con el modelo real y de resolver el DNS de la base de grafos.
 
-Se reproduce con:
+---
+
+## 0. Estado actual — índice v2
+
+| | v1 (antes) | **v2 (ahora)** |
+|---|---|---|
+| Índice | `uclm-corpus-roma` | **`recavai-corpus-v2`** (AWS us-east-1, serverless, protección de borrado) |
+| Vectores | 9.176 | **8.127** |
+| Modelo | `all-MiniLM-L6-v2` (inglés, 256 tokens) | **`intfloat/multilingual-e5-small`** (multilingüe, 512 tokens, prefijos `query:`/`passage:`) |
+| Dimensión | 384 | 384 |
+| Umbral de similitud | 0,55 | **0,841** (calibrado con las preguntas reales para dejar sin contexto la misma fracción, 8,4 %) |
+| Troceado | desconocido (el script no está en el repositorio) | **por unidad normativa** (`src/chunking_v2.py`), determinista |
+| Tokens descartados al vectorizar | **41,2 %** | **~0 %** (17 fragmentos de 8.127 pasan de 512) |
+| Fragmentos con la página mal («p.1» en documentos largos) | **64 %** | **1,0 %** |
+| Unidad normativa en metadatos | no | **sí**: 2.793 fragmentos (272 de artículos, 595 de requisitos NEIS, 1.903 de contenidos GRI, 23 de anexos) |
+| Palabras partidas por guión blando | 1.065 fragmentos | **0** (se limpian al extraer) |
+| Grafo | Neo4j declarado, instancia inexistente | **en memoria**: 381 unidades, 408 referencias cruzadas, 24 modificaciones |
+| Ids de vector | globales (`chunk_000123`) | **por documento** (`01-csddd-069c7ea5-0037`) |
+
+**Fragmentos v2.** Palabras p25/mediana/p75/máx: 123 / 181 / 201 / 393; caracteres
+816 / 1.211 / 1.331 / 1.998; 1.262.211 palabras en total (más que el corpus porque cada
+fragmento repite la última frase del anterior dentro de la misma unidad). Metadatos:
+`text, source, page, page_end, total_pages, block_type, primary_category, unit_label,
+section, chunker` y, cuando aplica, `article` y `modifications`. Al vectorizar se
+antepone una cabecera de contexto («CSDDD … · Artículo 10 · Prevención de efectos
+adversos potenciales») que no se guarda en `text`: las citas son literales.
+
+**Categorías.** Se conservaron las `primary_category` de v1 por documento
+(`data/categorias_v1.json`) para que la comparación midiera solo el troceado. Tienen
+incoherencias heredadas (la guía OCDE de agricultura figura como «GRI»).
+
+**Registro de normas.** `data/normas_corpus.json`: los 186 números de norma citados en el
+corpus. Lo usan los controles del asesor (ver `AGENTE.md`).
+
+**Resultado.** Sobre la batería de 60 preguntas, el pasaje que contiene la respuesta se
+recupera en el 68 % de las preguntas (v1: 35 %) y la página es correcta en el 60 % (v1:
+3 %). Detalle en [RAG_V2_RESULTADOS.md](RAG_V2_RESULTADOS.md).
+
+Se reconstruye con:
+
+```
+python scripts/extract_corpus_text.py --corpus "<carpeta>" --out .cache/corpus_txt
+python scripts/build_memory_index.py --chunker-v2 .cache/corpus_txt --reembed intfloat/multilingual-e5-small --out .cache/idx_C.npz
+python scripts/build_normative_graph.py && python scripts/build_norm_registry.py
+python scripts/upsert_index_v2.py --npz .cache/idx_C.npz --index <índice>
+```
+
+---
+
+# Estado anterior — índice v1 (medido el 2026-09-23, antes del cambio)
+
+Medido contra los sistemas vivos: la carpeta del corpus, el índice de Pinecone que
+servía entonces y la instancia de Neo4j declarada en Cloud Run. Se reproduce con:
 
 ```
 python scripts/corpus_inventory.py --corpus "<carpeta>" --pinecone --out docs/CORPUS
@@ -60,7 +117,7 @@ La CSDDD incorpora las Directivas (UE) 2025/794 (*stop the clock*) y 2026/470
 | Métrica | coseno |
 | Namespaces | 1, llamado literalmente `__default__` (no la cadena vacía) |
 | Vectores | **9.176** |
-| Protección de borrado | **desactivada** |
+| Protección de borrado | **desactivada** (activada el 23/09/2026) |
 
 Región relevante: el índice está en Virginia y el servicio de Cloud Run en
 `europe-west1`. Cada búsqueda cruza el Atlántico.
@@ -233,15 +290,16 @@ afecta aún más que al corpus global.
 
 ---
 
-## 6. Resumen de lo que está roto
+## 6. Resumen de lo que estaba roto en v1
 
-| | Gravedad | Alcance |
-|---|---|---|
-| El 41,2 % de los tokens indexados no entra en el vector (`DEBT-13`) | alta | 4.186 de 9.176 fragmentos |
-| El grafo normativo no existe; el sistema es RAG semántico puro (`DEBT-14`) | alta | toda la rama «hybrid» |
-| 1.065 fragmentos con palabras partidas por guión (`DEBT-12`) | media | NEIS, CSRD, CSDDD |
-| Modelo de embeddings inglés sobre corpus español (`DEBT-4`) | media | todo el índice |
-| El *chunker* original no está en el repositorio (`DEBT-3`) | baja | reindexación completa |
+| | Gravedad | Alcance | En v2 |
+|---|---|---|---|
+| El 41,2 % de los tokens indexados no entra en el vector (`DEBT-13`) | alta | 4.186 de 9.176 fragmentos | resuelto: ~0 % con e5-small y fragmentos ≤ 2.000 caracteres |
+| El grafo normativo no existe; el sistema es RAG semántico puro (`DEBT-14`) | alta | toda la rama «hybrid» | resuelto: grafo en memoria; Neo4j retirado |
+| El 64 % de los fragmentos lleva la página mal (`DEBT-15`) | alta | citas de todo el corpus | resuelto: 1 % |
+| 1.065 fragmentos con palabras partidas por guión (`DEBT-12`) | media | NEIS, CSRD, CSDDD | resuelto: se limpian al extraer |
+| Modelo de embeddings inglés sobre corpus español (`DEBT-4`) | media | todo el índice | resuelto: modelo multilingüe |
+| El *chunker* original no está en el repositorio (`DEBT-3`) | baja | reindexación completa | resuelto: `src/chunking_v2.py`, determinista |
 
 Los dos primeros son la misma historia contada dos veces: se diseñó una arquitectura
 de recuperación rica —grafo normativo, entidades, tripletas, enrutado híbrido— y lo

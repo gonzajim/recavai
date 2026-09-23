@@ -5,16 +5,16 @@ normativa y grafo normativo en memoria. Batería de 60 preguntas en 13 tipos
 ([BATERIA_V1.md](../benchmarks/BATERIA_V1.md)), congelada en el commit `2c90e90`
 **antes** de construir nada nuevo.
 
-## Estado al cerrar el día
+## Estado al cerrar el día (actualizado tras el despliegue)
 
 | | |
 |---|---|
-| Producción | revisión `orchestrator-dev-00056-loh` (v1), 100 % del tráfico. **Sin cambios.** |
-| Versión de prueba | revisión `orchestrator-dev-00059-guh` (commit `8523966`, con la corrección del auditor), etiqueta `canary`, 0 % del tráfico. Responde. **Lista para promover.** |
+| Producción | **revisión `orchestrator-dev-00060-rax`, 100 % del tráfico** desde el 23/09/2026 ~21:15 UTC: índice v2 + grafo + agente asesor (commit `d843c20`). Arranque verificado: índice `recavai-corpus-v2`, modelo e5-small desde la imagen, grafo de 385 nodos. Volver atrás: `./scripts/deploy.sh rollback dev orchestrator-dev-00056-loh` |
+| Revisiones anteriores | `00059-guh` (v2 sin agente, nunca recibió tráfico) y `00056-loh` (v1, la que servía hasta el promote) |
 | Índice v2 | `recavai-corpus-v2`, 8.127 vectores, us-east-1 (el plan gratuito de Pinecone no admite regiones europeas), protección de borrado activada. |
 | Índice v1 | `uclm-corpus-roma`, intacto, protección de borrado activada hoy. |
 | Gemini | El crédito prepago se agotó durante la evaluación (error 402, también en producción) y se recargó el mismo día; la clave de producción vuelve a responder. |
-| Decisión | **Promover C+G.** Se cumplen las condiciones 1-4; la 5 (latencia) es indeterminada con 60 preguntas y se acepta (ver abajo). Falta ejecutar `./scripts/deploy.sh promote dev`. |
+| Decisión | **Promovido.** Condiciones 1-4 cumplidas; la 5 (latencia) era indeterminada con 60 preguntas y se aceptó. Con el agente, la latencia medida bajó (p50 7,7 s, p95 15,1 s). |
 
 ## Configuraciones
 
@@ -100,14 +100,14 @@ La fidelidad sigue baja en todas las configuraciones: es un problema de generaci
 
 ## Qué falta
 
-1. `./scripts/deploy.sh promote dev` — pasa el 100 % del tráfico a la revisión 00059.
-2. Comprobar en el widget una pregunta del asesor y una respuesta del auditor.
-3. Volver atrás, si algo va mal: `./scripts/deploy.sh rollback dev` (la revisión 00056 y
-   el índice v1 siguen intactos).
-4. Pendientes que no bloquean: fidelidad de la generación (el modelo completa con lo que
-   sabe: ~28 % de respuestas sin afirmaciones no respaldadas); B60 (Ley 11/2018) sigue
-   inventando; la sonda de arranque de Cloud Run da la instancia por lista antes de que
-   la aplicación cargue.
+1. Comprobar en el widget una pregunta del asesor y una respuesta del auditor contra
+   producción, y vigilar `./scripts/logs.sh agente` y `./scripts/logs.sh errors` los
+   primeros días.
+2. Si algo va mal: `./scripts/deploy.sh rollback dev orchestrator-dev-00056-loh` (índice v1
+   intacto; la revisión antigua lleva fijados su índice y su modelo).
+3. Pendientes que no bloquean, en `docs/SPEC.md` §15: `DEBT-16` (errores sin cifras que
+   ningún control detecta), `DEBT-17` (encargos de redacción), `DEBT-18` (crédito de Gemini
+   compartido), `DEBT-19` (sonda de arranque).
 
 ## Reproducir
 

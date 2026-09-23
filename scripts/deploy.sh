@@ -82,8 +82,10 @@ EOF
     gcloud run revisions list --service "$SERVICE" --region "$REGION" --project "$PROJECT" \
       --format="table(metadata.name, status.conditions[0].lastTransitionTime.date('%Y-%m-%d %H:%M'), spec.containers[0].image.basename())" \
       --limit 5
-    PREVIOUS=$(gcloud run services describe "$SERVICE" --region "$REGION" --project "$PROJECT" \
-      --format="value(status.traffic.filter(percent=100).revisionName)" | head -1)
+    # Las proyecciones de gcloud no filtran listas por el valor de un campo
+    # (`traffic.filter(percent=100)` falla); se lee el JSON.
+    PREVIOUS=$(gcloud run services describe "$SERVICE" --region "$REGION" --project "$PROJECT" --format=json \
+      | python3 -c 'import sys, json; t = json.load(sys.stdin)["status"].get("traffic", []); print(next((x["revisionName"] for x in t if x.get("percent") == 100), ""))')
     say "Enviando el 100% del tráfico a la última revisión"
     gcloud run services update-traffic "$SERVICE" --region "$REGION" --project "$PROJECT" --to-latest
     echo

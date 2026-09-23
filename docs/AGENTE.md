@@ -26,6 +26,28 @@ anteriores al Ómnibus). El prompt lo autorizaba: «si usas información de tu c
 general, no cites», los documentos solo servían para «enriquecer» y una estructura
 obligatoria de 5 secciones que el modelo rellenaba de memoria.
 
+## Qué consiguió
+
+Medido el 23/09/2026 ([benchmarks/RESULTADOS_FIDELIDAD.md](../benchmarks/RESULTADOS_FIDELIDAD.md)):
+
+| | Prompt monolítico | Agente |
+|---|---:|---:|
+| Respuestas sin afirmaciones no respaldadas (juez) | 33 % | **90 %** |
+| Datos críticos sin respaldo por respuesta (batería / preguntas reales) | 0,40 / 0,80 | **0 / 0** |
+| Contradicen un dato clave (de 60) | 8 | **3** |
+| Trampas detectadas (artículo inexistente, término inventado, ley fuera del corpus) | 2/3 | **3/3** |
+| Juez a ciegas viendo los fragmentos (batería) | 6 | **52** (2 empates) |
+| Juez a ciegas viendo los fragmentos (40 preguntas reales no usadas para diseñar) | 4 | **36** |
+| Latencia p50 / p95 | 12,0 / 21,0 s | **7,7 / 15,1 s** |
+
+La capa de reparación apenas actúa (1 vez en 40 preguntas reales): el contrato de las
+habilidades basta casi siempre. Queda como red de seguridad.
+
+**Limitaciones conocidas:** errores sustantivos sin cifra ni artículo (p. ej. afirmar que
+habrá NEIS sectoriales obligatorias) no los detecta ningún control; los encargos de
+redacción (cláusulas, guías paso a paso) se resuelven resumiendo la norma en vez de
+redactar; a veces se abstiene aunque el fragmento tenía la respuesta (1 caso en 60).
+
 ## Habilidades — `src/agent/skills/*.md`
 
 Cada fichero es una habilidad con cabecera:
@@ -41,20 +63,20 @@ order: 50
 ---
 ```
 
-| Orden | Habilidad | Tareas | Qué fija |
-|---:|---|---|---|
-| 0 | identidad | todas | Rol, ámbito, que trabaja sobre una base documental |
-| 10 | **fundamentacion** | todas | El contrato: todo dato normativo con cita [n] o «no consta en la base documental»; los fragmentos consolidados prevalecen sobre la memoria |
-| 20 | citas | todas | Cómo citar, usando la unidad de la cabecera del fragmento |
-| 30 | abstencion | todas | Obedecer los AVISOS DEL SISTEMA, corregir premisas falsas, decir cuándo no hay base |
-| 40 | jerarquia_normativa | todas | Niveles 1-3 y precedencia; no mezclar CSRD y CSDDD |
-| 50 | csrd_neis | todas, con disparadores | Formulaciones correctas de CSRD y NEIS |
-| 51 | csddd | todas, con disparadores | Formulaciones correctas de la CSDDD tras el Ómnibus |
-| 52 | estandares | todas, con disparadores | OCDE y GRI como Nivel 3; no enumerar de memoria |
-| 60 | formato_asesor | asesor | Respuesta directa y fundamento; secciones solo si hay respaldo |
-| 61 | orientacion_practica | asesor | Consejo práctico solo en sección rotulada, sin datos normativos |
-| 70 | herramienta_auditor | herramienta | Conciso, sin orientación práctica |
-| 71 | verificacion | verificacion | Formato VEREDICTO/BRECHA/RECOMENDACIÓN/BASE, «no evaluable» si no hay base |
+| Orden | Habilidad | Versión | Tareas | Qué fija |
+|---:|---|---:|---|---|
+| 0 | identidad | 2 | todas | Rol, ámbito, qué puede hacer el usuario (preguntar, subir PDF, modo auditor); responder con naturalidad a saludos |
+| 10 | **fundamentacion** | 2 | todas | El contrato: todo dato normativo con cita [n] o «no consta»; los fragmentos consolidados prevalecen sobre la memoria; «completo sí, relleno no» |
+| 20 | citas | 2 | todas | Nombrar la unidad en la frase («artículo 3 de la CSDDD [1]»), tomada de la cabecera del fragmento |
+| 30 | abstencion | 2 | todas | Obedecer los AVISOS DEL SISTEMA, revisar índices y listas antes de decir que algo no consta, corregir premisas falsas |
+| 40 | jerarquia_normativa | 1 | todas | Niveles 1-3 y precedencia; no mezclar CSRD y CSDDD |
+| 50 | csrd_neis | 1 | todas, con disparadores | Formulaciones correctas de CSRD y NEIS |
+| 51 | csddd | 1 | todas, con disparadores | Formulaciones correctas de la CSDDD tras el Ómnibus |
+| 52 | estandares | 1 | todas, con disparadores | OCDE y GRI como Nivel 3; no enumerar de memoria |
+| 60 | formato_asesor | 3 | asesor | Completa y ordenada: respuesta directa, fundamento con encabezados, listas enteras, resumen final; hablar de la norma, no de «la base documental» |
+| 61 | orientacion_practica | 1 | asesor | Consejo práctico solo en sección rotulada, sin datos normativos |
+| 70 | herramienta_auditor | 1 | herramienta | Conciso, sin orientación práctica |
+| 71 | verificacion | 1 | verificacion | Formato VEREDICTO/BRECHA/RECOMENDACIÓN/BASE, «no evaluable» si no hay base |
 
 **Composición** (`skills.compose(tarea, pregunta)`): siempre las habilidades sin
 disparadores de la tarea; de las que tienen disparadores, solo las que la pregunta activa
@@ -118,7 +140,7 @@ contesta con un dato inventado sin avisar es peligroso.
  "ms": {"recuperacion": 480, "generacion": 9800, "reparacion": 8700, "total": 18990}}
 ```
 
-Consulta útil en Cloud Logging: `jsonPayload.evt="agent_turn"` o, con texto plano,
+Resumen de las últimas 24 h: `./scripts/logs.sh agente` (turnos, avisos, reparados, anotados). Consulta directa en Cloud Logging: `jsonPayload.evt="agent_turn"` o, con texto plano,
 `textPayload:"agent_turn"`. Proporción de turnos reparados y anotados: el indicador de
 salud de la fidelidad en producción.
 

@@ -114,5 +114,5 @@ norma en lugar de redactar la plantilla pedida.
 ## Decisión
 
 Con el juez que ve los fragmentos, se cumplen las siete condiciones y la validación con
-preguntas reales lo confirma (36–4). Recomendación: desplegar como versión de prueba y
-promover.
+preguntas reales lo confirma (36–4). **Desplegado** el 23/09/2026 en la revisión
+`orchestrator-dev-00060-rax` (commit `d843c20`), 100 % del tráfico.

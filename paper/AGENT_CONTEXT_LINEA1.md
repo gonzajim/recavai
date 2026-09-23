@@ -1,6 +1,6 @@
 # AGENT CONTEXT — Línea 1: construcción de la base de conocimiento para RAG regulatorio en español
 
-*Contexto operativo para agentes que trabajen en esta línea. Última actualización: 2026-09-18. Lee esto entero antes de tocar código o texto.*
+*Contexto operativo para agentes que trabajen en esta línea. Última actualización: 2026-09-23. Lee esto entero antes de tocar código o texto.*
 
 ## 1. Qué es esto
 
@@ -28,13 +28,25 @@ Proyecto RECAVA-IA / RecavAI: asistente RAG de cumplimiento en sostenibilidad (C
 | Golden set v1 | **No existe.** Lo produce la Línea 3 (plan de 8 semanas con IDPEI, artefacto "Plan del Golden Set v1"). Tareas T1 (con columna `articulo`) y T9 (`parafrasis`) alimentan este experimento. |
 | `paper/linea1_kb_construction_es_regulatory_rag.md` | Borrador v0.1 en inglés. §3.2 (recuentos PRISMA) y §6–7 (resultados/discusión) son plantillas con placeholders. |
 | `paper/EXPLICACION_LINEA1.md` | Explicación en español, sección a sección, con la lista de tareas pendientes del autor. |
-| Resultados reales | **Ninguno.** No inventar. No presentar el smoke test como resultado. |
+| `src/chunking_v2.py` | **Nuevo (23/09).** Troceado por unidad normativa (artículo, requisito NEIS, contenido GRI) + cabecera contextual embebida; es el troceado del índice de producción v2. Emparenta con `semantic_struct_ctx` del experimento, pero parte primero por unidad y solo después por tamaño (no por breakpoints semánticos). |
+| `src/normative_graph.py` | **Nuevo (23/09).** Grafo esqueleto determinista (381 unidades, 408 referencias, 24 modificaciones) en producción. Es la versión desplegada de la condición `skeleton` de H1.3, más la resolución de referencias explícitas en la pregunta. |
+| Batería v1 (`benchmarks/bateria_v1.jsonl`) | **Nueva (23/09).** 60 preguntas de desarrollo con fuentes y unidad esperada. **No es el golden set**: la escribió el equipo, no juristas, sin doble anotación. Sirve para decidir despliegues. |
+| Resultados reales | **Ninguno confirmatorio.** Hay evidencia de desarrollo con la batería (§3.1). No presentarla como resultado del artículo. No presentar el smoke test como resultado. |
 
 ## 3. Hechos del sistema que hay que respetar
 
-- Índice de producción Pinecone `uclm-corpus-roma` (384d, `all-MiniLM-L6-v2`): 9.176 vectores, un vector por bloque de layout, mediana 2 palabras/chunk. **Nunca escribir en él.** Reindexar siempre en un namespace de prueba (`corpus_v2`) o en memoria.
-- Constantes de recuperación en producción: `_CANDIDATE_K=12`, `_MIN_SCORE=0.55`, `_MAX_RESULTS=6`. Por eso `k=6` es el valor por defecto del experimento.
-- Chunking fijo del despliegue original: 400 palabras, 50 solape (`_CHUNK_WORDS`, `_CHUNK_OVERLAP` en `rag_service.py`). `kb_experiment.chunk_fixed` lo reproduce.
+- **Índice de producción desde el 23/09/2026: `recavai-corpus-v2`** (384d, `intfloat/multilingual-e5-small`, 8.127 vectores, troceado `chunking_v2`, umbral 0,841). El anterior, `uclm-corpus-roma` (384d, `all-MiniLM-L6-v2`, 9.176 vectores, mediana 95 palabras por fragmento, 98,4 % del corpus indexado), se conserva para volver atrás. **No escribir en ninguno de los dos.** Experimentos en memoria (`scripts/build_memory_index.py`) o en un índice de prueba.
+- ~~Mediana de 2 palabras por fragmento~~: dato **falso**, repetido hasta el 23/09/2026 en varios documentos. Medido: mediana 95.
+- Constantes de recuperación: `_CANDIDATE_K=12`, `_MIN_SCORE` por variable de entorno (0,55 con MiniLM; 0,841 con e5), `_MAX_RESULTS=6`. Por eso `k=6` es el valor por defecto del experimento.
+- Troceado fijo para PDF subidos por el usuario: 250 palabras, 40 de solape desde el 23/09 (antes 400/50). `kb_experiment.chunk_fixed` usa `FIXED_WORDS=400` para reproducir el despliegue original.
+- `paraphrase-multilingual-mpnet-base-v2`, candidato por defecto del CLI del experimento, **corta en 128 tokens**: peor que MiniLM. Declararlo o sustituirlo antes de ejecutar H1.4.
+
+### 3.1 Evidencia de desarrollo (23/09/2026, batería v1, no confirmatoria)
+
+- **Truncado de MiniLM:** 4.186 de 9.176 fragmentos (45,6 %) superan 256 *word-pieces*; se descarta el 41,2 % de los tokens indexados. Relevante para H1.4: la ventaja del multilingüe se confunde con la del límite de contexto.
+- **Página errónea en v1:** el 64 % de los fragmentos dice estar en la página 1. Cualquier métrica doc+página sobre v1 está sesgada a la baja.
+- **Solo modelo (B) frente a modelo + troceado (C):** pasaje recuperado 35 % (MiniLM, v1) → 47 % (e5, mismos fragmentos, n.s.) → 61 % (e5 + troceado por unidad, IC excluye 0) → 68 % (+ grafo esqueleto, +7 sobre C con IC que excluye 0). Sugiere interacción modelo × troceado (cf. H1.1, H1.4) y efecto del grafo esqueleto (cf. H1.3). **Diseño no factorial, batería no validada: solo orienta.**
+- Detalle: `docs/RAG_V2_RESULTADOS.md`, `docs/ARQUITECTURA_DATOS.md`.
 - `.env` en la raíz (gitignored) con `PINECONE_*`, `GEMINI_API_KEY`. Cargar con `set -a; source .env; set +a; unset GOOGLE_APPLICATION_CREDENTIALS`. Nunca commitearlo.
 - Python 3.14, venv en `.venv`. Modelos cacheados en HF: `all-MiniLM-L6-v2`, `paraphrase-multilingual-MiniLM-L12-v2`. `paraphrase-multilingual-mpnet-base-v2` se descarga en la primera ejecución.
 - `scipy` disponible; `rank_bm25` NO (por eso `kb_experiment.BM25` es una implementación propia).
@@ -94,7 +106,7 @@ Hipótesis apoyada ⇔ IC bootstrap pareado 95 % del contraste primario excluye 
 
 1. Golden set v1 con `articulo` y `parafrasis` (Línea 3 / IDPEI). Bloqueante.
 2. Ejecutar búsquedas de la revisión sistemática; rellenar §3.2 y Apéndice A del paper; verificar TODAS las referencias contra DOI/arXiv (están escritas de memoria, con nota de verificación).
-3. Reindexar corpus real con `corpus_pipeline` en namespace de prueba; correr `kb_experiment` con los tres modelos (+ `intfloat/multilingual-e5-base`, `BAAI/bge-m3` como extensión).
+3. Correr `kb_experiment` sobre el corpus real (en memoria) con MiniLM, `intfloat/multilingual-e5-small` (el de producción) y un tercer modelo con ≥ 512 tokens (`multilingual-e5-base` o `bge-m3`); añadir `chunking_v2` como estrategia comparada si se quiere evaluar el troceado desplegado.
 4. Pegar tablas en §6, escribir §7 siguiendo los marcos fijados.
 5. Insertar título del paper IPMU 2026 en la referencia `[Own]`.
 6. Opcional: brazo `--llm` (propositions + grafo emergente), ejecutado dos veces para reportar varianza.
@@ -102,7 +114,7 @@ Hipótesis apoyada ⇔ IC bootstrap pareado 95 % del contraste primario excluye 
 ## 8. No hacer
 
 - No inventar resultados ni recuentos PRISMA. No presentar el smoke test como evidencia.
-- No tocar el índice de producción ni el namespace `__default__`.
+- No tocar los índices de producción (`recavai-corpus-v2`, `uclm-corpus-roma`).
 - No cambiar hipótesis, contrastes o reglas de decisión sin el usuario (están pre-registradas).
 - No commitear `.env`, `results/`, `benchmarks/baseline.jsonl`, `benchmarks/run_*.jsonl`.
 - No reescribir el paper en español: el destino es en inglés. La explicación sí va en español.
@@ -110,4 +122,4 @@ Hipótesis apoyada ⇔ IC bootstrap pareado 95 % del contraste primario excluye 
 ## 9. Documentos relacionados
 
 - Artefactos (privados, claude.ai): "Líneas doctorales RAG jurídico" (define las 3 líneas), "Plan RAG, Explicabilidad y Benchmark" (§04 tareas T1–T9), "Metodología del Golden Set", "Plan del Golden Set v1" (8 semanas con IDPEI, κ).
-- `benchmarks/README.md` (cómo correr todo), `DOCUMENTACION.md` (arquitectura del sistema; no describe el chunking del corpus).
+- `benchmarks/README.md` (cómo correr todo), `docs/ARQUITECTURA_DATOS.md` (estado medido de corpus, índices, modelo y grafo), `docs/AGENTE.md` (asesor: habilidades, controles, harness), `docs/SPEC.md`.

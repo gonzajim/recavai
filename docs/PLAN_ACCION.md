@@ -1,5 +1,14 @@
 # Plan de acción sin esperar al golden set
 
+> **Estado (2026-09-23): ejecutado el mismo día, con cambios.** En lugar del conjunto de
+> plata y de la semana en sombra se usó una batería de 60 preguntas
+> ([benchmarks/BATERIA_V1.md](../benchmarks/BATERIA_V1.md)), una repetición sobre 226
+> preguntas reales y una versión de prueba antes de promover. Además se añadió una capa de
+> fidelidad del asesor (habilidades, controles y harness: [AGENTE.md](AGENTE.md)).
+> Resultados: [RAG_V2_RESULTADOS.md](RAG_V2_RESULTADOS.md) y
+> [RESULTADOS_FIDELIDAD.md](../benchmarks/RESULTADOS_FIDELIDAD.md). Lo que sigue es el plan
+> tal como se escribió.
+
 Versión ejecutable de [PLAN_RAG_V2.md](PLAN_RAG_V2.md). Aquel plan bloqueaba la puesta
 en producción hasta tener el golden set v1; este no. Seis semanas, seis entregas, cada
 una con su criterio de aceptación y su vuelta atrás.

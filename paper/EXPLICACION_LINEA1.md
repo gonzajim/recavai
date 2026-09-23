@@ -132,3 +132,43 @@ Lo que el smoke test mostró (y que es un chequeo del instrumento, no un resulta
 4. **Pegar las tablas** del `report.md` en §6 y escribir §7 siguiendo los marcos ya fijados.
 5. **Título del paper IPMU 2026** en la referencia `[Own]`.
 6. Decidir destino: si los resultados de H1.2 son limpios, ECIR/SIGIR short (es el hallazgo más general); si lo que brilla es la cita y el grafo, ICAIL/JURIX.
+
+---
+
+## Novedades del 23/09/2026 y qué implican para el artículo
+
+**Qué cambió en el sistema.** Producción usa ahora un índice nuevo (`recavai-corpus-v2`)
+con `intfloat/multilingual-e5-small`, troceado por unidad normativa (`src/chunking_v2.py`)
+y un grafo esqueleto determinista en memoria (`src/normative_graph.py`); Neo4j se retiró
+porque la instancia no existía. El asesor pasó a un diseño con habilidades, controles y
+harness (`docs/AGENTE.md`).
+
+**Evidencia de desarrollo, no resultados.** Con una batería de 60 preguntas escrita por el
+equipo (no por juristas, sin doble anotación), el pasaje de la respuesta se recuperó en el
+35 % de las preguntas con el sistema original, 47 % cambiando solo el modelo (sin
+significación), 61 % cambiando modelo y troceado, y 68 % añadiendo el grafo esqueleto. Es
+coherente con H1.1, H1.3 y H1.4, pero **no las contrasta**: el diseño no es factorial y la
+batería no está validada. Sirve para saber que merece la pena ejecutar el experimento, no
+para escribir §6.
+
+**Dos cosas que afectan al diseño (decisión tuya):**
+
+1. **H1.4 mezcla idioma y longitud de contexto.** MiniLM corta en 256 *word-pieces* y el
+   español fragmenta al doble que el inglés: el índice original descartaba el 41,2 % de los
+   tokens. Además, `paraphrase-multilingual-mpnet-base-v2`, uno de los tres modelos del
+   diseño, corta en 128. Si gana el multilingüe, no se sabrá si es por el idioma o por el
+   contexto. Opciones: sustituir mpnet por `multilingual-e5-small` (el de producción, 512
+   tokens), o añadir una condición con fragmentos que quepan en 128/256 tokens.
+2. **El troceado y el grafo desplegados** son candidatos naturales a condiciones del
+   experimento: `chunking_v2` como estrategia comparada (parte por unidad y luego por
+   tamaño, sin breakpoints semánticos) y `normative_graph` como implementación de
+   `skeleton`. Añadirlos no cambia las hipótesis, pero sí la tabla de condiciones.
+
+**Motivación del artículo.** El dato del truncado (41,2 %) y el de las páginas erróneas
+(64 % de los fragmentos) están medidos y pueden sustituir a la «fragmentación del índice»
+que no se sostuvo. Ya están en la introducción del borrador.
+
+**La fidelidad es otra línea.** La mejora de fidelidad del asesor (del 33 % al 90 % de
+respuestas sin afirmaciones no respaldadas) viene de las habilidades y los controles de
+generación, no de la base de conocimiento. Encaja mejor en la línea de explicabilidad y
+benchmark que en esta.

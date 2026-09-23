@@ -37,7 +37,7 @@ Firebase Auth permite exportar e importar usuarios **con sus contraseñas**, per
 Firestore (hilos, mensajes, progreso de auditoría, metadatos de documentos) y BigQuery (histórico de turnos). El histórico de BigQuery tiene valor para el panel de experto; los hilos de Firestore, menos. Se puede migrar solo BigQuery.
 
 **1.4 ¿Un índice de Pinecone o dos?**
-Hoy hay uno (`uclm-corpus-roma`) y lo comparten todos. Separar dev y prod de verdad implica dos índices y reindexar, que es justo lo que hará el pipeline nuevo. Aprovechar la migración para reindexar con `corpus_pipeline.py` mata dos pájaros, pero **exige pasar antes el benchmark**: reindexar cambia la calidad de las respuestas y hay que medir el antes y el después.
+Desde el 23/09/2026 hay dos: `recavai-corpus-v2` (el que sirve, troceado por unidad normativa y vectores de `multilingual-e5-small`) y `uclm-corpus-roma` (v1, conservado para volver atrás). El reindexado ya está hecho y medido (`docs/RAG_V2_RESULTADOS.md`), así que la migración **no necesita reindexar**: basta con cargar el mismo `.npz` en el índice del proyecto nuevo con `scripts/upsert_index_v2.py`, o compartir `recavai-corpus-v2`. Si se separan, el grafo normativo (`data/normative_graph.json`) sigue valiendo porque los ids de los vectores son los mismos. El plan gratuito de Pinecone solo admite `us-east-1`.
 
 **1.5 Facturación**
 El proyecto vivo se está facturando hoy a la cuenta **«Alfonso»** (`0131EB-A0BD56-558557`), no a la cuenta **«recava»** (`014698-82BF02-E0EF64`), que está abierta. Los proyectos nuevos deberían nacer ya en la cuenta correcta. Conviene aclarar por qué está así antes de replicarlo.
@@ -66,7 +66,7 @@ for p in recavai-dev recavai-prod; do
 done
 ```
 
-Después, en cada proyecto: crear los secretos (`GEMINI_API_KEY`, `PINECONE_API_KEY`, `PINECONE_INDEX_NAME`, `BIGQUERY_DATASET_ID`, `BIGQUERY_TABLE_ID`, `NEO4J_PASSWORD`), la base de datos de Firestore en `europe-west1`, el dataset de BigQuery, y añadir el proyecto a Firebase con Authentication y Hosting.
+Después, en cada proyecto: crear los secretos (`GEMINI_API_KEY`, `PINECONE_API_KEY`, `PINECONE_INDEX_NAME`, `BIGQUERY_DATASET_ID`, `BIGQUERY_TABLE_ID`; Neo4j se retiró el 23/09/2026), la base de datos de Firestore en `europe-west1`, el dataset de BigQuery, y añadir el proyecto a Firebase con Authentication y Hosting.
 
 Convención de nombres, ya fijada en [`DESPLIEGUE.md`](DESPLIEGUE.md) §1.1: servicios `orchestrator-dev` y `orchestrator-prod`; sitios `recavai-dev`, `recavai-dev-panel`, `recavai-prod`, `recavai-prod-panel`. Nunca un nombre que incluya el número de proyecto.
 
@@ -119,8 +119,8 @@ Pasado el periodo de gracia, y con una copia verificada de los datos: borrar los
 | Los usuarios pierden el acceso porque cambió la dirección | Dominio propio (§1.1); si no, redirección desde el sitio viejo |
 | Todo el mundo tiene que restablecer la contraseña | Migrar los parámetros de hash, o decidir de antemano empezar limpio |
 | Se pierden conversaciones ocurridas durante el volcado | Poner el sistema viejo en solo lectura antes de exportar |
-| El reindexado cambia la calidad de las respuestas | Pasar el benchmark antes y después; no mezclar migración y reindexado si se puede evitar |
-| Cuotas y claves de terceros | Pinecone, Neo4j y Gemini tienen límites por clave: comprobar que dos entornos no se estorban |
+| Cambiar el índice cambia la calidad de las respuestas | No reindexar en la migración: reutilizar el índice v2 ya evaluado; si se reindexa, pasar la batería antes y después |
+| Cuotas y claves de terceros | Pinecone y Gemini tienen límites por clave y por proyecto. Gemini gasta de un **crédito prepago compartido** entre claves del mismo proyecto de AI Studio: un entorno puede dejar sin servicio al otro (ocurrió el 23/09/2026). Cada entorno, su proyecto de AI Studio y su saldo |
 | Quedan referencias al proyecto viejo | `grep -rn "recava-auditor" .` antes del corte |
 
 ## 4. Alternativa más barata, por si cambia la prioridad

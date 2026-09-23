@@ -7,7 +7,8 @@
 #   ./scripts/logs.sh req  <id>         Todo lo de una petición (X-Request-Id)
 #   ./scripts/logs.sh thread <id>       Todo lo de una conversación
 #   ./scripts/logs.sh auditor [horas]   Actividad del auditor: registros, cierres, veredictos
-#   ./scripts/logs.sh rag [horas]       Enrutado y recuperación
+#   ./scripts/logs.sh rag [horas]       Enrutado, recuperación y grafo normativo
+#   ./scripts/logs.sh agente [horas]    Turnos del asesor: avisos, violaciones, reparaciones
 #   ./scripts/logs.sh slow [ms] [horas] Peticiones más lentas de N ms (por defecto 5000)
 #   ./scripts/logs.sh resumen [horas]   Cuántas peticiones, cuántos errores, latencias
 #   ./scripts/logs.sh consola           Abre el visor web con el filtro puesto
@@ -74,7 +75,21 @@ case "$ACTION" in
   rag)
     say "Recuperación, últimas ${2:-24}h"
     read_logs '(textPayload:"RAG routing" OR textPayload:"RAG message built" OR
-                textPayload:"category filter")' "${2:-24}h" 100 | sort
+                textPayload:"category filter" OR textPayload:"Grafo normativo")' "${2:-24}h" 100 | sort
+    ;;
+
+  agente)
+    # Una línea JSON por turno del asesor (src/agent/harness.py). Lo que importa vigilar:
+    # "reparada": true (el control de salida encontró datos sin respaldo) y sobre todo
+    # "anotada": true (se sirvió con una nota de datos no verificados).
+    say "Turnos del asesor, últimas ${2:-24}h"
+    rows=$(read_logs 'textPayload:"agent_turn"' "${2:-24}h" 1000)
+    total=$(printf '%s\n' "$rows" | grep -c agent_turn || true)
+    rep=$(printf '%s\n' "$rows" | grep -c '"reparada": true' || true)
+    ann=$(printf '%s\n' "$rows" | grep -c '"anotada": true' || true)
+    avi=$(printf '%s\n' "$rows" | grep -c '"avisos": \[\"' || true)
+    printf '  turnos %s · con avisos %s · reparados %s · anotados %s\n' "$total" "$avi" "$rep" "$ann"
+    printf '%s\n' "$rows" | grep -E '"reparada": true|"anotada": true' | cut -c1-400 | head -20
     ;;
 
   slow)

@@ -59,10 +59,15 @@ Sin Java tendrás que trabajar con `USE_EMULATORS=0`, con la precaución que eso
 |---|---|
 | `GEMINI_API_KEY` | **El backend no arranca.** Es la única imprescindible |
 | `PINECONE_API_KEY` | Arranca, pero sin recuperación: el asistente responde sin corpus y sin citas |
-| `NEO4J_PASSWORD` | Arranca; se omiten las consultas al grafo (solo afecta a preguntas operativas) |
+| `RAG_NORMATIVE_GRAPH` vacío | Arranca sin grafo normativo: sin expansión por referencias ni resolución de «artículo N» |
 | Credenciales de aplicación | BigQuery y Firestore real fallan al inicializarse. Con `USE_EMULATORS=1` y `DISABLE_BIGQUERY=1` no hacen falta para el día a día |
 
-El modelo de embeddings se descarga de Hugging Face la primera vez (~90 MB) y queda en caché.
+El modelo de embeddings (`intfloat/multilingual-e5-small`, ~470 MB) se descarga de Hugging Face la primera vez y queda en caché. En la imagen de Docker ya va incluido.
+
+**Índice, modelo y umbral van juntos.** El `.env.example` trae la configuración v2
+(`RAG_INDEX_NAME=recavai-corpus-v2`, `EMBEDDING_MODEL_NAME=intfloat/multilingual-e5-small`,
+`RAG_MIN_SCORE=0.841`, `RAG_NORMATIVE_GRAPH=data/normative_graph.json`). Un `.env` anterior
+al 23/09/2026 apunta al índice v1 con MiniLM: funciona, pero no es lo que corre en producción.
 
 ## Pruebas
 
@@ -70,7 +75,10 @@ El modelo de embeddings se descarga de Hugging Face la primera vez (~90 MB) y qu
 ./scripts/dev.sh test
 ```
 
-Ejecuta [`scripts/test_auditor.py`](../scripts/test_auditor.py): 33 comprobaciones de la lógica del auditor **sin red, sin claves y sin Firestore** (usa un doble en memoria y un asesor simulado). Cubre lo que se rompió en producción: que un bloque no pueda cerrarse a medias, que las preguntas de perfil no consulten al asesor y las evaluables sí, que un fallo del asesor no impida registrar la respuesta, y que el bloque activo siga a donde se está trabajando.
+Ejecuta, **sin red, sin claves y sin Firestore**:
+
+- [`scripts/test_auditor.py`](../scripts/test_auditor.py) — 46 comprobaciones del auditor (doble de Firestore en memoria y asesor simulado): que un bloque no pueda cerrarse a medias, que las preguntas de perfil no consulten al asesor y las evaluables sí, que un fallo del asesor no impida registrar la respuesta, que el bloque activo siga a donde se está trabajando y que el verificador busque con la sustancia de la respuesta, no con sus instrucciones.
+- [`scripts/test_agent.py`](../scripts/test_agent.py) — 47 comprobaciones del agente asesor: carga y composición de las habilidades, cada control (datos críticos, citas inexistentes, normas y artículos inexistentes, contexto vacío) y el bucle del harness con un modelo simulado (reparación que funciona, reparación que no, nota final).
 
 Ejecútalo antes de cada despliegue. Tarda unos segundos.
 
@@ -80,12 +88,19 @@ Otras comprobaciones útiles:
 # Nivel de autenticación de cada endpoint
 grep -n "@app.route\|require_.*_or_403()" app.py
 
-# Calidad de la recuperación frente a la línea base
-set -a; source .env; set +a
-python -m src.rag_benchmark --golden benchmarks/golden_set.jsonl \
-  --embedding-model sentence-transformers/all-MiniLM-L6-v2 \
-  --baseline benchmarks/baseline.jsonl --out results/run.jsonl
+# Solo búsqueda sobre la batería de 60 preguntas (sin llamadas a Gemini, ~1 min)
+python scripts/eval_battery.py run --name prueba --index recavai-corpus-v2 \
+  --model intfloat/multilingual-e5-small --min-score 0.841 \
+  --graph data/normative_graph.json --no-generate
+
+# Evaluación completa (60 generaciones + 60 juicios: cuesta crédito de Gemini)
+python scripts/eval_battery.py run --name prueba ... --judge-model gemini-3.5-flash
+python scripts/eval_battery.py compare H4 prueba
 ```
+
+Ver [`../benchmarks/README.md`](../benchmarks/README.md). La clave de Gemini local gasta
+del mismo crédito que producción: antes de una evaluación completa, lee
+[`DESPLIEGUE.md` §5.1](DESPLIEGUE.md).
 
 ## Trabajo habitual
 
@@ -93,16 +108,31 @@ python -m src.rag_benchmark --golden benchmarks/golden_set.jsonl \
 
 **Cambiar el comportamiento del auditor** → reglas en `AUDITOR_SYSTEM_PROMPT` ([`src/assistant_instructions.py`](../src/assistant_instructions.py)). Si la regla debe cumplirse siempre, no la dejes en el prompt: impleméntala en el servidor, como el control de cobertura de `complete_audit_block`.
 
-**Cambiar la recuperación** → [`src/rag_service.py`](../src/rag_service.py). Mide antes y después con el benchmark; las constantes están en `SPEC.md` §7.1.
+**Cambiar el comportamiento del asesor** → sus habilidades, en [`src/agent/skills/`](../src/agent/skills/). Una por fichero, con versión: súbela al cambiar el texto. Las reglas que deban cumplirse siempre no van en una habilidad sino en un control de [`src/agent/guardrails.py`](../src/agent/guardrails.py). Ver [`AGENTE.md`](AGENTE.md).
 
-**Tocar el índice del corpus** → `src/corpus_pipeline.py` es un proceso por lotes que reindexa por completo. Úsalo siempre contra un *namespace* de pruebas, nunca contra el de producción sin pasar antes el benchmark.
+**Cambiar la recuperación** → `retrieve_documents` en [`src/gemini_service.py`](../src/gemini_service.py) y [`src/rag_service.py`](../src/rag_service.py). Mide antes y después con la batería; las constantes están en `SPEC.md` §7.1.
+
+**Tocar el índice del corpus** → troceado en [`src/chunking_v2.py`](../src/chunking_v2.py); se construye en local y se carga en un índice **nuevo**, nunca sobre el que está sirviendo:
+
+```bash
+python scripts/extract_corpus_text.py --corpus "<carpeta>" --out .cache/corpus_txt
+python scripts/build_memory_index.py --chunker-v2 .cache/corpus_txt \
+  --reembed intfloat/multilingual-e5-small --out .cache/idx_nuevo.npz
+python scripts/build_normative_graph.py      # los ids de los vectores cambian: regenerar
+python scripts/build_norm_registry.py
+python scripts/calibrate_threshold.py ...    # umbral para el índice nuevo
+python scripts/upsert_index_v2.py --npz .cache/idx_nuevo.npz --index <índice-nuevo>
+```
+
+Los ids son por documento (`01-csddd-069c7ea5-0037`), así que reindexar un documento no
+toca los demás.
 
 ## Avisos
 
 - `.env` nunca se commitea. Contiene claves reales.
 - Con `USE_EMULATORS=0` estás escribiendo en la base de datos de los usuarios.
 - El panel de administración (`./scripts/dev.sh panel`) llama al Cloud Run de desarrollo, no a tu backend local, porque tiene la URL cableada en `UserManagement.js`.
-- Las reglas de Firestore del repositorio permiten lectura y escritura a cualquiera (`DEBT-1` en `SPEC.md`). Sirven para el emulador; no deben desplegarse.
+- Las reglas de Firestore del repositorio deniegan todo acceso directo (`if false`), igual que las publicadas: el backend usa el Admin SDK, que no está sujeto a ellas, también contra el emulador.
 
 ## Documentos relacionados
 
@@ -111,4 +141,5 @@ python -m src.rag_benchmark --golden benchmarks/golden_set.jsonl \
 | [`DESPLIEGUE.md`](DESPLIEGUE.md) | Subir cambios al entorno vivo |
 | [`SPEC.md`](SPEC.md) | Especificación normativa del sistema |
 | [`documentacion.html`](documentacion.html) | Explicación del sistema para personas |
+| [`AGENTE.md`](AGENTE.md) | Habilidades, controles y harness del asesor |
 | [`../benchmarks/README.md`](../benchmarks/README.md) | Benchmark y experimento de la base de conocimiento |

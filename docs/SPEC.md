@@ -5,9 +5,9 @@
 
 | Field | Value |
 |---|---|
-| `spec_version` | 1.0.0 |
-| `generated_at` | 2026-09-19 |
-| `derived_from_commit` | `7199b2f` (branch `paper/linea1-kb-construction`) |
+| `spec_version` | 1.1.0 |
+| `generated_at` | 2026-09-19 · updated 2026-09-23 (index v2, normative graph, advisor agent) |
+| `derived_from_commit` | `d843c20` (branch `rag-v2`), deployed as Cloud Run revision `orchestrator-dev-00060-rax` |
 | `source_of_truth` | The code. This spec describes observed behaviour, not intent. Where they diverge, the code wins and this spec is a defect. |
 | `language_of_system` | Spanish (UI, prompts, corpus) |
 | `language_of_spec` | English |
@@ -211,10 +211,10 @@ user_documents/{uid}/files/{doc_id}      { doc_id, filename, chunk_count, size_b
 
 | Namespace | Content | Vector id | Metadata |
 |---|---|---|---|
-| `""` (default) | Global corpus, 9176 vectors | `chunk_NNNNNN` | `text, source, page, total_pages, primary_category, block_type, entities, triplets, graph_importance` |
+| `""` (default), index `recavai-corpus-v2` | Global corpus, 8,127 vectors | `<doc-slug>-<sha1[:8]>-<NNNN>` (per document) | `text, source, page, page_end, total_pages, primary_category, block_type, unit_label, section, chunker`, and when applicable `article`, `modifications` |
 | `<uid>` | That user's uploaded PDFs | `<doc_id>_<chunk_index>` | `text, doc_id, filename, chunk_index, uploaded` |
 
-**DATA-PC-1** Dimensionality is 384 and MUST match the loaded embedding model.
+**DATA-PC-1** Dimensionality is 384 and MUST match the loaded embedding model. Index v2 is built with `intfloat/multilingual-e5-small` and `passage: ` prefixes; queries use `query: ` (`rag_service._e5_prefix`). Index v1 (`uclm-corpus-roma`, 9,176 vectors, `all-MiniLM-L6-v2`, ids `chunk_NNNNNN`) is kept for rollback; both have deletion protection enabled.
 
 **DATA-PC-2** A user's documents MUST live only in their own namespace. Cross-namespace retrieval is forbidden.
 
@@ -245,12 +245,12 @@ user_documents/{uid}/files/{doc_id}      { doc_id, filename, chunk_count, size_b
 ```python
 # src/rag_service.py
 _CANDIDATE_K          = 12     # corpus candidates fetched
-_MIN_SCORE            = 0.55   # corpus cosine cutoff
+_MIN_SCORE            = float(env RAG_MIN_SCORE, default 0.55)  # 0.841 with e5-small (scripts/calibrate_threshold.py)
 _MAX_RESULTS          = 6      # corpus chunks passed to the LLM
 _USER_DOCS_MIN_SCORE  = 0.25   # user-namespace cutoff
 _MAX_USER_FILES       = 25
-_CHUNK_WORDS          = 400    # user-PDF fixed window
-_CHUNK_OVERLAP        = 50
+_CHUNK_WORDS          = 250    # user-PDF fixed window (≈350 e5 tokens, under 512)
+_CHUNK_OVERLAP        = 40
 _MAX_CHUNKS           = 500
 
 # src/context_orchestrator.py
@@ -264,26 +264,30 @@ _GEMINI_MODEL         = "gemini-2.5-flash"
 _CONTEXT_BUDGET       = {"gemini-2.5-flash": 180_000,
                          "gemini-2.5-flash-lite": 180_000,
                          "gemini-2.5-pro": 540_000}   # characters
+_GRAPH_EXPAND         = 3      # max fragments per query from explicit references and from 1-hop expansion
+
+# src/agent/harness.py
+GenerationPolicy(temperature=0.2, max_output_tokens=8192, max_repairs=1)
 max_rounds            = 6      # tool-call loop cap
 ```
 
 ### 7.2 Retrieval order
 
-**RAG-1** `_build_rag_message` MUST search in this order and concatenate results in this order: (1) user namespace `uid`, (2) FAISS local store, (3) global corpus. User documents MUST precede corpus chunks in the numbered list.
+**RAG-1** `retrieve_documents` MUST search in this order and concatenate results in this order: (1) user namespace `uid`, (2) FAISS local store, (3) global corpus, with fragments of units named in the question first (`CMP-GRAPH` explicit reference) and 1-hop graph expansion last. User documents MUST precede corpus chunks in the numbered list. The query embedding is computed from `retrieval_query` when given (the auditor's verifier passes the substance of the answer, without its format instructions).
 
 **RAG-2** The query embedding MUST be computed once per turn and reused across all sources.
 
 **RAG-3** Category filter: if the query matches CSDDD or GRI term sets, the corpus search MUST be filtered by `primary_category`. If a filtered search returns zero results, it MUST be retried without the filter.
 
-**RAG-4** Question classification MUST return one of `resource`, `operational`, `conceptual`, `unknown`, by first match against the signal lists in `src/rag_service.py`. Routing: `resource`/`operational` → `hybrid`; `conceptual`/`unknown` → `semantic`.
+**RAG-4** Question classification returns one of `resource`, `operational`, `conceptual`, `unknown`. Since Neo4j was retired it is logged only; it does not change retrieval.
 
-**RAG-5** Graph context MUST be fetched only when strategy is `hybrid`, and only with the character budget remaining after semantic chunks (minus a 500-char reserve).
+**RAG-5** When `RAG_NORMATIVE_GRAPH` is set, the normative graph MUST be applied to every question: explicit references first (≤ `_GRAPH_EXPAND`), then 1-hop expansion from retrieved units (≤ `_GRAPH_EXPAND`, excluding hubs with in-degree > 25), neighbours ranked by cosine to the query.
 
 **RAG-6** Chunks are appended to the context while `used_chars + len(chunk) <= char_budget`. A chunk that does not fit MUST still appear in `sources[]` (so citation numbering stays stable) but MUST NOT be added to the prompt text.
 
-**RAG-7** Chunk header format in the prompt: `[{i}] {title} ({category}, p.{page}/{total_pages}, relevancia={score:.2f})`.
+**RAG-7** Chunk header format in the prompt: `[{i}] {title} ({unit_label}, {category}, p.{page}[-{page_end}]/{total_pages}, relevancia={score:.2f})`, with `unit_label` only when present.
 
-**RAG-8** If no semantic chunks and no graph context are available, the original user message MUST be sent unaugmented.
+**RAG-8** If no chunks fit, the user message is sent with only the guardrail notices (if any), otherwise unaugmented.
 
 **RAG-9** Retrieval failure MUST be caught and degrade to the unaugmented message (`ARC-6`).
 
@@ -406,7 +410,7 @@ max_rounds            = 6      # tool-call loop cap
 
 **SEC-5** Allowed methods: `GET, POST, PATCH, DELETE, OPTIONS`. Allowed headers: `Authorization, Content-Type, Idempotency-Key`. Exposed: `X-Request-Id`.
 
-**SEC-6** Secrets MUST come from Secret Manager at deploy time: `GEMINI_API_KEY`, `PINECONE_API_KEY`, `PINECONE_INDEX_NAME`, `BIGQUERY_DATASET_ID`, `BIGQUERY_TABLE_ID`, `NEO4J_PASSWORD`. `.env` MUST remain gitignored.
+**SEC-6** Secrets MUST come from Secret Manager at deploy time: `GEMINI_API_KEY`, `PINECONE_API_KEY`, `PINECONE_INDEX_NAME`, `BIGQUERY_DATASET_ID`, `BIGQUERY_TABLE_ID`. `.env` MUST remain gitignored. (`NEO4J_PASSWORD` is no longer used; the secret can be deleted.)
 
 **SEC-7** Logs MUST NOT contain full message bodies or tokens. Query logging is truncated (80 chars).
 
@@ -414,23 +418,25 @@ max_rounds            = 6      # tool-call loop cap
 
 ## 11. Deployment specification
 
-**OPS-1** Cloud Run: `--cpu=2 --memory=4Gi --concurrency=40 --timeout=600s --port=8080 --region=europe-west1 --allow-unauthenticated`. Platform auth is open because application auth is mandatory (`SEC-1`).
+**OPS-1** Cloud Run: `--cpu=2 --memory=4Gi --concurrency=16 --timeout=600s --port=8080 --region=europe-west1 --allow-unauthenticated`. Platform auth is open because application auth is mandatory (`SEC-1`).
 
-**OPS-2** Container: multi-stage. `torch` installed in its own layer from `https://download.pytorch.org/whl/cpu` with `--extra-index-url https://pypi.org/simple` (required for build backends such as `flit_core`). Final image runs as non-root `appuser`, exposes 8080, has a `HEALTHCHECK` against `/health`, and runs `gunicorn --workers 4 --timeout 120`.
+**OPS-2** Container: multi-stage. `torch` installed in its own layer from `https://download.pytorch.org/whl/cpu` with `--extra-index-url https://pypi.org/simple` (required for build backends such as `flit_core`). The embedding model is downloaded at build time (`ARG EMBEDDING_MODEL`, `HF_HOME=/opt/hf`) and the final image runs with `HF_HUB_OFFLINE=1`. It copies `data/normative_graph.json` and `data/normas_corpus.json`. Final image runs as non-root `appuser`, exposes 8080, has a `HEALTHCHECK` against `/health`, and runs `gunicorn --workers 2 --threads 8 --worker-class gthread --timeout 120` (e5-small uses ~1 GB per process; 4 processes do not fit in 4 GiB).
 
 **OPS-3** Cloud Build steps in order: build image (BuildKit, inline cache) → push → deploy Cloud Run → install firebase-tools → npm install + build admin panel → firebase deploy hosting (`allowFailure: true`).
 
 **OPS-4** Firebase Hosting targets: `chatbot` → `public/chatbot`; `admin-panel` → `public/admin-panel/build` with SPA rewrite to `/index.html`.
 
-**OPS-5** Environment variables set at deploy: `EMBEDDING_MODEL_NAME`, `NEO4J_URI`, `NEO4J_USERNAME`, `NEO4J_DATABASE`.
+**OPS-5** Environment variables set at deploy (`--set-env-vars`, from `cloudbuild.yaml` substitutions): `EMBEDDING_MODEL_NAME`, `RAG_INDEX_NAME`, `RAG_MIN_SCORE`, `RAG_NORMATIVE_GRAPH`. Index, model and threshold MUST be pinned per revision, never via the `PINECONE_INDEX_NAME` secret (read as `latest`): a rollback would otherwise query the new index with the old model. `--remove-secrets=NEO4J_PASSWORD`.
 
-**OPS-6** Recognised env vars: `GEMINI_API_KEY`, `PINECONE_API_KEY`, `PINECONE_INDEX_NAME`, `BIGQUERY_DATASET_ID`, `BIGQUERY_TABLE_ID`, `EMBEDDING_MODEL_NAME`, `CORS_ORIGINS`, `RAG_SEARCH_WORKERS`, `FAISS_MAX_SESSIONS`, `DISABLE_BIGQUERY`, `NEO4J_*`, `PORT`, `FLASK_DEBUG`, `GOOGLE_APPLICATION_CREDENTIALS`, `FIREBASE_AUTH_EMULATOR_HOST`.
+**OPS-6** Recognised env vars: `GEMINI_API_KEY`, `PINECONE_API_KEY`, `PINECONE_INDEX_NAME`, `RAG_INDEX_NAME` (takes precedence), `BIGQUERY_DATASET_ID`, `BIGQUERY_TABLE_ID`, `EMBEDDING_MODEL_NAME`, `RAG_MIN_SCORE`, `RAG_NORMATIVE_GRAPH`, `RAG_NORM_REGISTRY`, `CORS_ORIGINS`, `RAG_SEARCH_WORKERS`, `FAISS_MAX_SESSIONS`, `DISABLE_BIGQUERY`, `PORT`, `FLASK_DEBUG`, `GOOGLE_APPLICATION_CREDENTIALS`, `FIREBASE_AUTH_EMULATOR_HOST`.
 
 **OPS-7** Local run: `set -a; source .env; set +a; unset GOOGLE_APPLICATION_CREDENTIALS` (ADC file is `authorized_user` type; `credentials.Certificate` requires `service_account`, so the ApplicationDefault path must be used).
 
 ---
 
 ## 12. Offline pipeline specification
+
+**PIPE-0** The production index v2 is built with `src/chunking_v2.py` (structure-first: article / annex / NEIS disclosure requirement / GRI disclosure or topic; ~1,400 chars, max 2,000, one-sentence overlap within a unit; contextual header embedded, not stored in `text`), embedded with e5-small, and uploaded to a **new** index with `scripts/upsert_index_v2.py`. `PIPE-1`…`PIPE-5` describe the older `corpus_pipeline.py`, not used for v2.
 
 **PIPE-1** `src/corpus_pipeline.py` is a **batch job, executed once per corpus version**, not a service. It fully reindexes the target namespace.
 
@@ -452,13 +458,19 @@ max_rounds            = 6      # tool-call loop cap
 
 **QA-1** `src/rag_benchmark.py` measures `hit@k`, `recall@k`, `precision@k`, `mrr` against a golden set, optionally adding LLM-judged `groundedness`, `correctness`, `citation_ok`.
 
-**QA-2** Production baseline (10 seed questions, production index): `hit@k 0.80`, `recall@k 0.65`, `precision@k 0.42`, `mrr 0.51`. Conceptual questions are weakest (`hit@k 0.50`, `mrr 0.29`).
+**QA-2** Initial baseline (10 seed questions, index v1): `hit@k 0.80`, `recall@k 0.65`, `precision@k 0.42`, `mrr 0.51`. Conceptual questions are weakest (`hit@k 0.50`, `mrr 0.29`).
 
 **QA-3** Golden set v1 is produced by the IDPEI workshop protocol: ~50 T1 questions with document + page + **article**, double independent annotation, κ ≥ 0.70 target, plus T9 paraphrases.
 
 **QA-4** `src/kb_experiment.py` runs the factorial study (chunking × embedding × lexical distance × graph) with `citation@article` metrics and pre-registered contrasts H1.1–H1.4. Its hypotheses and decision rules MUST NOT be changed without the project owner.
 
-**QA-5** Any architectural change to retrieval MUST be measured against the baseline before and after.
+**QA-5** Any change to retrieval, the embedding model, the index or the advisor's skills MUST be measured before and after with the development battery (`QA-6`), with the decision rule written before measuring.
+
+**QA-6** Development battery: `benchmarks/bateria_v1.jsonl` (60 items, 13 types, expected sources with unit, 175 key facts verified against the corpus), run by `scripts/eval_battery.py` through the production harness. Metrics: retrieval (`doc@6`, `pasaje@6`, `pag@6`, `mrr`), deterministic fidelity (`criticos`), judge-scored (`cobertura`, `fiel`, `rechazo_ok`, `veredicto_ok`, `cita_unidad`), latency. It is NOT the golden set (`QA-3`) and MUST NOT be edited to favour a change.
+
+**QA-7** Evaluation hygiene: the same judge for every configuration compared (`rejudge`); two passes for generation-dependent metrics (fidelity ±13 pts, coverage ±6 between identical runs); pairwise judges MUST see the fragments (`--with-context`), because without them they judge by their own pre-2026 knowledge.
+
+**QA-8** Results as of 2026-09-23 (production before → after): passage retrieved 35 % → 68 %; correct page 3 % → 60 %; answers with no unsupported claim 17 % → 90 %; unsupported critical data per answer 0.42 → 0; traps 1/3 → 3/3; latency p50 12 s → 8 s. Blind pairwise with fragments on 40 held-out real questions: new 36, old 4. Details: `docs/RAG_V2_RESULTADOS.md`, `benchmarks/RESULTADOS_FIDELIDAD.md`.
 
 ---
 
@@ -484,45 +496,56 @@ max_rounds            = 6      # tool-call loop cap
 
 ## 15. Known deviations (debt)
 
-| id | Severity | Deviation | Location | Violates |
+| id | Status | Deviation | Location | Violates |
 |---|---|---|---|---|
-| `DEBT-1` | medium | `firestore.rules` in the repo grants `read, write: if true`, but that file is **not** what is deployed. Verified 2026-09-23 via the Firebase Rules API: the live ruleset (`cbe2190d…`, released 2025-10-19) is `allow read, write: if false`, which is correct for this architecture — all access goes through the Admin SDK server-side, which bypasses rules. The defect is the **divergence**: any `firebase deploy --only firestore:rules` from a clean checkout would open the database to the world. Fix the repo file to match production, do not "fix production" | `firestore.rules` | `INV-2`, `SEC-3` |
-| `DEBT-2` | high | `/admin/ingest_document` authorises with `require_firebase_user_or_403`, not `require_admin_or_403`; any verified user can write to the global corpus | `app.py` | `API-ADM-1`, `DATA-PC-3` |
-| `DEBT-3` | low | The **chunker** that produced the production index is absent from the repo (any branch or history), so chunk boundaries cannot be reproduced; `entities`/`triplets` are empty although the schema declares them. Measured 2026-09-23: 9,176 vectors, 98.4 % of corpus text indexed, median 95 words/vector — the index is **not** pathologically fragmented, contrary to what this entry claimed until that date. Also verified 2026-09-23: each stored vector is exactly `all-MiniLM-L6-v2` over its own `text` metadata, L2-normalised (cosine 1.0000 on sample), so **vectors are reproducible from the index itself** even though the boundaries are not | Pinecone `uclm-corpus-roma` | — |
-| `DEBT-4` | medium | English monolingual embedding model over a Spanish corpus | `src/config.py` | `ARC-3` (locked-in) |
-| `DEBT-5` | medium | User-PDF chunks carry no page number (pages flattened before windowing) | `src/rag_service.py` | `RAG-10` |
-| `DEBT-6` | medium | Deployed chat widget predates HEAD; the login-failure visibility fix is not live | `public/chatbot/` | `UI-6` |
-| `DEBT-7` | low | `README.md` describes an OpenAI Assistants architecture that no longer exists | `README.md` | `SYS-1` |
-| `DEBT-8` | low | Admin list hardcoded in source; adding an admin requires a redeploy | `app.py` `_ADMIN_EMAILS` | — |
-| `DEBT-9` | low | FAISS store still initialised and searched although uploads are permanent in Pinecone | `src/local_vector_store.py` | — |
-| `DEBT-10` | low | `@limiter.limit` is declared above `@app.route`; limits are registered by function name so they likely apply, but this is unverified by test | `app.py` | `API-0.6` |
-| `DEBT-11` | low | Working files in repo root: `firestore-debug.log`, `bubble_tmp.bin`, `temp.js`, `test_api.ps1` | repo root | — |
-| `DEBT-13` | high | `all-MiniLM-L6-v2` caps at 256 word-pieces; 4,186 of 9,176 indexed chunks (45.6 %) exceed it, so 41.2 % of indexed word-pieces (1,057,855 of 2,567,811) never reach the vector. Those chunks hold 83.4 % of corpus words. Verified 2026-09-23: cosine between a 735-token chunk's stored vector and the embedding of only its first 254 tokens = 1.0000. Text still reaches the generator once retrieved — the defect is in **retrieval**, not context. User uploads are worse: `_CHUNK_WORDS=400` ≈ 800 word-pieces in Spanish | `src/config.py`, `src/rag_service.py` | `DEBT-4`, `RAG-*` |
-| `DEBT-14` | resolved in branch `rag-v2` (Neo4j removed from code and deploy; replaced by `CMP-GRAPH`) — high until it takes traffic | The Neo4j graph does not exist. `neo4j+s://273d9982.databases.neo4j.io` returns NXDOMAIN on 8.8.8.8 and 1.1.1.1 while the parent domain resolves — deleted Aura instance. `get_graph_context` returns `""` on any failure, so the `hybrid` route degrades silently and indistinguishably from "no entities matched". No "Graph RAG" line in 30 days of production logs. `entities`/`triplets` are `'[]'` in all 9,176 vectors. **The running system is pure semantic RAG**; docs calling it GraphRAG describe the code, not production | `src/rag_service.py`, Cloud Run env | `ARC-*`, `DEBT-3` |
-| `DEBT-15` | high | Page metadata of index v1 is wrong for most chunks: 5,883 of 9,176 (64 %) claim page 1 in documents longer than 3 pages (NEIS 966/1,205; Marco Teórico 637/958). Citations shown to users carry wrong pages; a CSDDD art. 10 chunk is labelled p.1. Measured 2026-09-23. Fixed by index v2 (`src/chunking_v2.py`: pages from the extraction itself, page_end added) — resolved when v2 takes traffic | Pinecone `uclm-corpus-roma` | `DEBT-3` |
-| `DEBT-12` | medium | 1,065 indexed chunks (12 %) carry words split by EUR-Lex line-break hyphenation (U+00AD), e.g. `empre­ sarial`, `obliga­ ciones`. Concentrated in the three legally load-bearing texts: `03_NEIS` 840, `02_CSDR` 116, `01_CSDDD` 109. Degrades both the embedding and the literal quotation shown to the user. Repair is prepared and reversible-by-recompute but **not applied**: `scripts/fix_soft_hyphens.py --apply` | Pinecone `uclm-corpus-roma` | `DEBT-3` |
+| `DEBT-1` | **resolved** 2026-09-23 | `firestore.rules` in the repo granted `read, write: if true` while the published ruleset (`cbe2190d…`, 2025-10-19) was `if false`; a deploy from a clean checkout would have opened the database. The repo file now matches production | `firestore.rules` | `INV-2`, `SEC-3` |
+| `DEBT-2` | **resolved** | `/admin/ingest_document` authorised any verified user; it now calls `require_admin_or_403()` | `app.py` | `API-ADM-1`, `DATA-PC-3` |
+| `DEBT-3` | **resolved** 2026-09-23 (index v2) | The chunker of index v1 was absent from the repo. Index v2 is built by `src/chunking_v2.py` (deterministic) and `scripts/build_memory_index.py` / `scripts/upsert_index_v2.py` | Pinecone | — |
+| `DEBT-4` | **resolved** 2026-09-23 | English embedding model over a Spanish corpus; replaced by `intfloat/multilingual-e5-small` | `src/config.py` | `ARC-3` |
+| `DEBT-5` | open · medium | User-PDF chunks carry no page number (pages flattened before windowing) | `src/rag_service.py` | `RAG-10` |
+| `DEBT-6` | open · low | The published chat widget may predate HEAD (login-failure visibility fix); not verified since 2026-09-20 | `public/chatbot/` | `UI-6` |
+| `DEBT-7` | **resolved** | `README.md` described the OpenAI Assistants architecture; rewritten | `README.md` | `SYS-1` |
+| `DEBT-8` | open · low | Admin list hardcoded in source; adding an admin requires a redeploy | `app.py` `_ADMIN_EMAILS` | — |
+| `DEBT-9` | open · low | FAISS store still initialised and searched although uploads are permanent in Pinecone | `src/local_vector_store.py` | — |
+| `DEBT-10` | open · low | `@limiter.limit` is declared above `@app.route`; limits likely apply, unverified by test | `app.py` | `API-0.6` |
+| `DEBT-11` | **resolved** | Working files in repo root removed | repo root | — |
+| `DEBT-12` | **resolved** 2026-09-23 (index v2) | 1,065 chunks of index v1 with words split by EUR-Lex soft hyphens; v2 strips U+00AD at extraction | Pinecone | — |
+| `DEBT-13` | **resolved** 2026-09-23 (index v2) | `all-MiniLM-L6-v2` dropped 41.2 % of indexed word-pieces (256-token limit). v2: e5-small (512), chunks ≤ 2,000 chars, 17 of 8,127 over the limit | `src/config.py`, Pinecone | — |
+| `DEBT-14` | **resolved** 2026-09-23 | The Neo4j instance did not exist (NXDOMAIN) and graph queries failed silently. Neo4j removed from code, requirements and deploy; replaced by `CMP-GRAPH`, which logs ERROR if enabled and not loadable | `src/normative_graph.py` | `ARC-6` |
+| `DEBT-15` | **resolved** 2026-09-23 (index v2) | 64 % of index v1 chunks claimed page 1; v2: 1 %, with `page_end` | Pinecone | — |
+| `DEBT-16` | open · medium | Substantive errors without figures, dates, articles or norm numbers are not caught by any guardrail (3 of 60 battery answers contradict a key fact). Would need sentence-level verification with a second model | `src/agent/guardrails.py` | `AGT-ADV-3` |
+| `DEBT-17` | open · medium | Drafting requests (contract clauses, step-by-step audit guides) are answered by summarising the norm instead of drafting; product decision pending | `src/agent/skills/` | — |
+| `DEBT-18` | open · medium | Production and development Gemini keys draw on one prepaid credit; an evaluation exhausted it on 2026-09-23 and production returned 402 until top-up | AI Studio billing | `INV-6` |
+| `DEBT-19` | open · medium | Cloud Run marks the revision ready when gunicorn opens the port, before the app imports; an idle new instance is CPU-throttled and the first request waits ~35-45 s. Needs an HTTP startup probe on `/health` or `--min-instances=1` | Cloud Run, `Dockerfile` | — |
+| `DEBT-20` | open · low | `primary_category` values inherited from v1 (`data/categorias_v1.json`) are inconsistent (e.g. OECD agriculture guide labelled `GRI`) and drive the category filter | `data/categorias_v1.json` | `RAG-3` |
 
-**Remediation order:** `DEBT-1`, `DEBT-2` (security, minutes) → `DEBT-13`, `DEBT-14` (retrieval is measurably broken) → `DEBT-12` → `DEBT-3` with benchmark gate → the rest.
+**Remediation order:** `DEBT-18` (operational, minutes: auto-reload + separate evaluation key) → `DEBT-19` → `DEBT-16`, `DEBT-17` (need a decision) → the rest.
 
 ---
 
 ## 16. Verification
 
 ```bash
+# Offline tests (no network, no keys): auditor + advisor agent
+./scripts/dev.sh test
+
 # Static: routes, auth level and rate limit per endpoint
 grep -n "@limiter.limit\|@app.route\|require_.*_or_403()" app.py
 
 # Static: RAG constants match §7.1
 grep -n "^_\(MIN_SCORE\|CANDIDATE_K\|MAX_RESULTS\|USER_DOCS_MIN_SCORE\|CHUNK_WORDS\|CHUNK_OVERLAP\|MAX_CHUNKS\)" src/rag_service.py
 
-# Offline pipeline, dry run (no writes)
-python -m src.corpus_pipeline --input ./corpus --dry-run --limit 3
+# Battery key facts still located in the corpus (175/175)
+python benchmarks/bateria_v1.py --verify .cache/corpus_txt
 
-# Retrieval quality against the baseline
-set -a; source .env; set +a
-python -m src.rag_benchmark --golden benchmarks/golden_set.jsonl \
-  --embedding-model sentence-transformers/all-MiniLM-L6-v2 \
-  --baseline benchmarks/baseline.jsonl --out results/run.jsonl
+# Retrieval-only battery run on the production configuration (no Gemini cost)
+python scripts/eval_battery.py run --name check --index recavai-corpus-v2 \
+  --model intfloat/multilingual-e5-small --min-score 0.841 \
+  --graph data/normative_graph.json --no-generate
+
+# Full battery with judge (≈120 Gemini calls) and comparison with the last accepted run
+python scripts/eval_battery.py run --name X ... --judge-model gemini-3.5-flash
+python scripts/eval_battery.py compare H4 X
 
 # Research harness instrument check (~1 min, no Pinecone)
 python -m src.kb_experiment --corpus benchmarks/smoke/corpus \
@@ -530,13 +553,14 @@ python -m src.kb_experiment --corpus benchmarks/smoke/corpus \
   --embedding-models sentence-transformers/all-MiniLM-L6-v2 \
   --chunking fixed semantic_struct --graph none skeleton --k 4 --out results/smoke
 
-# Health of the deployed service
-curl -s https://<cloud-run-host>/health
+# Deployed service: health, and the advisor's per-turn guardrail summary
+curl -s https://orchestrator-dev-370417116045.europe-west1.run.app/health
+./scripts/logs.sh agente
 ```
 
 **VER-1** A change to `app.py` routing MUST be accompanied by the first command's output.
-**VER-2** A change to retrieval MUST be accompanied by the benchmark comparison (`QA-5`).
-**VER-3** A change to chunking MUST be accompanied by a dry run and, if reindexing, by the index manifest of `PIPE-7`.
+**VER-2** A change to retrieval, the index, the embedding model or the advisor's skills MUST be accompanied by the battery comparison (`QA-5`, `QA-6`).
+**VER-3** A change to chunking MUST go to a new index (never the serving one), with the graph and norm registry regenerated (`scripts/build_normative_graph.py`, `scripts/build_norm_registry.py`) and the threshold recalibrated (`scripts/calibrate_threshold.py`).
 
 ---
 
@@ -545,7 +569,7 @@ curl -s https://<cloud-run-host>/health
 1. **Read before writing.** Locate the affected `CMP-*` and requirement IDs.
 2. **Do not widen access.** Any change touching `SEC-*` or `INV-*` requires explicit human confirmation in-session.
 3. **Do not touch production state.** No deploys, no pushes, no writes to the default Pinecone namespace, no `--wipe` (`INV-OPS-1`).
-4. **Keep the two documents in sync.** A behavioural change updates this spec and `docs/documentacion.html` in the same commit.
+4. **Keep the documents in sync.** A behavioural change updates this spec and `docs/documentacion.html` (and `docs/AGENTE.md` for the advisor) in the same commit.
 5. **Report honestly.** If a verification command fails, report the failure and its output; do not present unrun commands as run.
 6. **Prefer additive.** Legacy components (`CMP-FAISS`, `CMP-ORCH`) are removable only with a migration note, because running instances may still hold session state.
 
@@ -554,8 +578,11 @@ curl -s https://<cloud-run-host>/health
 | Path | Purpose |
 |---|---|
 | `docs/documentacion.html` | Human narrative of this spec |
-| `DOCUMENTACION.md` | Earlier long-form documentation (still largely accurate; superseded here for API and RAG details) |
-| `benchmarks/README.md` | How to run benchmark and experiment |
+| `DOCUMENTACION.md` | Earlier long-form documentation (August 2026). **Superseded**: describes Neo4j, the monolithic advisor prompt and index v1 |
+| `docs/AGENTE.md` | Advisor agent: skills, guardrails, harness, logging |
+| `docs/ARQUITECTURA_DATOS.md` | Measured state of corpus, indexes, model and graph (v2 now, v1 before) |
+| `docs/DESPLIEGUE.md`, `docs/DESARROLLO.md` | Deploy/rollback procedure; local development |
+| `benchmarks/README.md` | How to run the battery, the judge, pairwise comparisons and the Línea 1 experiment |
 | `paper/AGENT_CONTEXT_LINEA1.md` | Research-line context (Línea 1) |
 | `paper/linea1_kb_construction_es_regulatory_rag.md` | Article draft |
 | `paper/EXPLICACION_LINEA1.md` | Article explained (Spanish) |

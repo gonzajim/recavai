@@ -1,5 +1,17 @@
 # Plan: chunking, vectorización y grafo normativo
 
+> **Estado (2026-09-23): ejecutado, en versión comprimida.** Este plan de 12 semanas se
+> sustituyó por [PLAN_ACCION.md](PLAN_ACCION.md) y después por una ejecución en un solo día
+> con una batería de 60 preguntas en lugar del conjunto de plata y del golden set. Se hizo:
+> modelo `multilingual-e5-small` (Fase 1, sin comparar modelos grandes), troceado por unidad
+> normativa (Fase 2, sin comparar las cinco estrategias), grafo determinista en memoria sin
+> Neo4j (Fase 3, sin la capa de equivalencias entre marcos) e índice nuevo con ids por
+> documento (Fase 4, en us-east-1 porque el plan gratuito de Pinecone no admite Europa).
+> Una estimación de §1.2 resultó equivocada: e5-small «cabe de sobra» en 4 GiB con un
+> proceso, pero no con los 4 que arrancaba gunicorn (~1 GB cada uno); se pasó a 2 procesos
+> × 8 hilos. Resultados: [RAG_V2_RESULTADOS.md](RAG_V2_RESULTADOS.md). Lo que sigue es el
+> plan tal como se escribió.
+
 Propuesta de trabajo para las tres líneas que se quieren abordar. Todas las cifras que
 aparecen aquí están medidas sobre el sistema real el 2026-09-23, no estimadas; el
 detalle está en [ARQUITECTURA_DATOS.md](ARQUITECTURA_DATOS.md).

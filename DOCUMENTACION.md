@@ -1,5 +1,11 @@
 # Documentación del Proyecto — Asistente de Auditoría y Asesoría en Sostenibilidad
 
+> **Documento superado (agosto de 2026).** Se conserva como historia. Describe una
+> arquitectura anterior (Neo4j, prompt único del asesor, índice v1 con MiniLM). La
+> documentación vigente es: [docs/documentacion.html](docs/documentacion.html) (para
+> personas), [docs/SPEC.md](docs/SPEC.md) (especificación), [docs/AGENTE.md](docs/AGENTE.md)
+> (asesor) y [docs/ARQUITECTURA_DATOS.md](docs/ARQUITECTURA_DATOS.md) (datos).
+
 ## Índice
 
 1. [Visión general](#1-visión-general)

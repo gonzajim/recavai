@@ -26,6 +26,7 @@ from dataclasses import dataclass, asdict
 from pathlib import Path
 
 SUPPORTED = {".pdf", ".docx", ".txt", ".md"}
+INDEX_NAME = [""]
 _WORD = re.compile(r"\S+")
 
 
@@ -172,7 +173,10 @@ def pinecone_sources() -> tuple[dict[str, int], dict[str, int]] | None:
     except ImportError:
         print("  (falta el paquete pinecone; se omite el contraste)", file=sys.stderr)
         return None
-    key, name = os.getenv("PINECONE_API_KEY"), os.getenv("PINECONE_INDEX_NAME")
+    # Igual que src/config.py: RAG_INDEX_NAME (el índice de la revisión) manda sobre el secreto.
+    key = os.getenv("PINECONE_API_KEY")
+    name = os.getenv("RAG_INDEX_NAME") or os.getenv("PINECONE_INDEX_NAME")
+    INDEX_NAME[0] = name or ""
     if not key or not name:
         print("  (faltan PINECONE_API_KEY / PINECONE_INDEX_NAME; se omite)", file=sys.stderr)
         return None
@@ -280,7 +284,10 @@ def report(docs: list[Doc], indexed: dict[str, int] | None) -> str:
                      and not any(norm(s) in norm(d.source) or norm(d.source) in norm(s) for d in docs)]
         idx_w = sum(d.palabras_indexadas for d in docs)
         src_w = sum(d.palabras for d in docs)
-        L.append("\n## Contraste con el índice\n")
+        L.append(f"\n## Contraste con el índice `{INDEX_NAME[0].split('//')[-1].split('.')[0]}`\n")
+        L.append("En el índice v2 cada fragmento repite la última frase del anterior dentro de la "
+                 "misma unidad normativa, así que las palabras indexadas pueden superar ligeramente "
+                 "a las del documento (cobertura > 100 %).\n")
         L.append(f"- Vectores en el índice: **{sum(indexed.values()):,}**".replace(",", "."))
         L.append(f"- Palabras del corpus: **{src_w:,}**".replace(",", "."))
         L.append(f"- Palabras realmente indexadas: **{idx_w:,}** "
@@ -334,7 +341,7 @@ def report(docs: list[Doc], indexed: dict[str, int] | None) -> str:
              "una versión ya superada sin avisar de ello.\n"
              "  ```\n  python scripts/check_eurlex_versions.py --corpus \"<carpeta>\"\n  ```")
     L.append("- **¿El texto indexado está limpio?** Los PDF oficiales parten palabras al final "
-             "de línea con un guión blando, y la partición sobrevive a la extracción.\n"
+             "de línea con un guión blando, y la partición sobrevive a la extracción. El índice v2 los limpia al extraer; el script sirve para el v1 o para cualquier índice construido de otra forma.\n"
              "  ```\n  python scripts/fix_soft_hyphens.py            # diagnóstico\n"
              "  python scripts/fix_soft_hyphens.py --apply    # repara el índice\n  ```")
     return "\n".join(L)

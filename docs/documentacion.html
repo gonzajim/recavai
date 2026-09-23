@@ -168,7 +168,7 @@
   .debt-item{ display:grid; grid-template-columns:auto minmax(0,1fr); gap:0 .9rem;
               background:var(--surface); border:1px solid var(--line); border-radius:8px; overflow:hidden; }
   .sev{ width:4px; }
-  .sev-hi{ background:var(--risk); } .sev-md{ background:var(--warn); } .sev-lo{ background:var(--ink-3); }
+  .sev-hi{ background:var(--risk); } .sev-md{ background:var(--warn); } .sev-lo{ background:var(--ink-3); } .sev-ok{ background:var(--ok); }
   .debt-body{ padding:.7rem .9rem .75rem 0; }
   .debt-body b{ font-size:.9rem; }
   .debt-body p{ margin:.2rem 0 0; font-size:.855rem; color:var(--ink-2); max-width:none; }
@@ -183,14 +183,15 @@
   <header class="masthead">
     <div class="eyebrow">RECAVA-IA · Documentación del sistema</div>
     <h1>RecavAI por dentro</h1>
-    <p class="standfirst">Asistente conversacional de cumplimiento en sostenibilidad para el marco europeo: qué hace, cómo está construido, qué ve el usuario en pantalla y qué partes todavía no están donde deberían. Escrito a partir del código de la rama de trabajo, no de la intención.</p>
+    <p class="standfirst">Asistente conversacional de cumplimiento en sostenibilidad para el marco europeo: qué hace, cómo está construido, qué ve el usuario en pantalla y qué partes todavía no están donde deberían. Escrito a partir del código de la rama de trabajo y de mediciones sobre el sistema, no de la intención.</p>
     <div class="facts">
       <span class="fact"><b>Backend</b> Flask + Gunicorn en Cloud Run</span>
       <span class="fact"><b>Modelo</b> Gemini 2.5 Flash</span>
-      <span class="fact"><b>Vectores</b> Pinecone · 384d</span>
-      <span class="fact"><b>Grafo</b> Neo4j AuraDB</span>
+      <span class="fact"><b>Vectores</b> Pinecone · e5-small · 384d</span>
+      <span class="fact"><b>Grafo</b> normativo, en memoria</span>
+      <span class="fact"><b>Asesor</b> habilidades + controles</span>
       <span class="fact"><b>Región</b> europe-west1</span>
-      <span class="fact"><b>Revisión</b> 19 sep 2026</span>
+      <span class="fact"><b>Revisión</b> 23 sep 2026</span>
     </div>
   </header>
 
@@ -270,8 +271,10 @@
           <div class="band-label">Orquestador — Cloud Run · europe-west1</div>
           <div class="tiles">
             <div class="tile accent"><b>app.py</b><span>rutas, auth, CORS, límites</span></div>
-            <div class="tile accent"><b>gemini_service</b><span>turno de chat, herramientas</span></div>
-            <div class="tile accent"><b>rag_service</b><span>embeddings, búsqueda, routing</span></div>
+            <div class="tile accent"><b>agent</b><span>habilidades, controles, harness del asesor</span></div>
+            <div class="tile accent"><b>gemini_service</b><span>auditor, herramientas, recuperación</span></div>
+            <div class="tile accent"><b>rag_service</b><span>embeddings e5, búsqueda</span></div>
+            <div class="tile accent"><b>normative_graph</b><span>grafo normativo en memoria</span></div>
             <div class="tile accent"><b>history / persistence</b><span>historial y trazas</span></div>
           </div>
         </div>
@@ -283,14 +286,13 @@
           <div class="tiles">
             <div class="tile"><b>Gemini 2.5 Flash</b><span>generación y tool-calling</span></div>
             <div class="tile"><b>Pinecone</b><span>corpus + ficheros de usuario</span></div>
-            <div class="tile"><b>Neo4j AuraDB</b><span>grafo de entidades</span></div>
             <div class="tile"><b>Firestore</b><span>hilos, progreso, ficheros</span></div>
             <div class="tile"><b>BigQuery</b><span>analítica de conversaciones</span></div>
           </div>
         </div>
       </div>
 
-      <p>Los embeddings se calculan <em>dentro</em> del contenedor con <code>sentence-transformers</code>, no con una API externa. Por eso el servicio necesita 2 vCPU y 4 GiB de memoria: carga el modelo en RAM al arrancar.</p>
+      <p>Los embeddings se calculan <em>dentro</em> del contenedor con <code>sentence-transformers</code> y el modelo <code>intfloat/multilingual-e5-small</code>, que va incluido en la imagen. Cada proceso lo carga en memoria (unos 1.000 MB), por eso el servicio arranca 2 procesos con 8 hilos cada uno en una instancia de 2 vCPU y 4 GiB. El grafo normativo también vive en memoria: un fichero JSON de 268 KB que se carga al arrancar.</p>
 
       <h3>Mapa de módulos</h3>
 
@@ -300,14 +302,17 @@
           <tbody>
             <tr><td class="mono">app.py</td><td>Rutas HTTP, verificación de token, CORS, límites de tasa, propiedad de hilos, endpoints de administración</td><td><span class="chip c-prod">Producción</span></td></tr>
             <tr><td class="mono">src/config.py</td><td>Carga de variables de entorno e inicialización de clientes (Gemini, Pinecone, BigQuery, modelo de embeddings)</td><td><span class="chip c-prod">Producción</span></td></tr>
-            <tr><td class="mono">src/gemini_service.py</td><td>Turno de conversación de cada modo, bucle de llamadas a herramientas, construcción del mensaje aumentado con los fragmentos</td><td><span class="chip c-prod">Producción</span></td></tr>
-            <tr><td class="mono">src/rag_service.py</td><td>Embeddings, búsqueda en Pinecone, filtro por categoría, clasificación de la pregunta, consulta al grafo, troceado de PDFs subidos</td><td><span class="chip c-prod">Producción</span></td></tr>
-            <tr><td class="mono">src/assistant_instructions.py</td><td>Prompts de sistema: el guion del auditor con sus ocho bloques y el del asesor</td><td><span class="chip c-prod">Producción</span></td></tr>
+            <tr><td class="mono">src/agent/</td><td>El asesor: habilidades en Markdown compuestas por tarea (<code>skills/</code>), controles deterministas de entrada, contexto y salida (<code>guardrails.py</code>) y el bucle de cada turno (<code>harness.py</code>)</td><td><span class="chip c-prod">Producción</span></td></tr>
+            <tr><td class="mono">src/gemini_service.py</td><td>Turno del auditor y bucle de herramientas; recuperación de fragmentos y construcción del mensaje con ellos</td><td><span class="chip c-prod">Producción</span></td></tr>
+            <tr><td class="mono">src/rag_service.py</td><td>Embeddings (con los prefijos que exige e5), búsqueda en Pinecone, filtro por categoría, troceado de PDFs subidos</td><td><span class="chip c-prod">Producción</span></td></tr>
+            <tr><td class="mono">src/normative_graph.py</td><td>Grafo normativo en memoria: resuelve «artículo 9 de la CSDDD» y añade los artículos a los que remiten los fragmentos</td><td><span class="chip c-prod">Producción</span></td></tr>
+            <tr><td class="mono">src/assistant_instructions.py</td><td>Prompt de sistema del auditor, con sus ocho bloques. El del asesor pasó a las habilidades</td><td><span class="chip c-prod">Producción</span></td></tr>
             <tr><td class="mono">src/history_service.py</td><td>Lee el historial de Firestore y lo convierte al formato que Gemini acepta, saneando la alternancia de turnos</td><td><span class="chip c-prod">Producción</span></td></tr>
             <tr><td class="mono">src/persistence_service.py<br>src/bigquery_service.py</td><td>Registro de cada turno en BigQuery y consultas de historial para el panel</td><td><span class="chip c-prod">Producción</span></td></tr>
             <tr><td class="mono">src/context_orchestrator.py</td><td>Búsqueda concurrente en Pinecone y FAISS con un pool de hilos reutilizado</td><td><span class="chip c-legacy">Parcial</span></td></tr>
             <tr><td class="mono">src/local_vector_store.py</td><td>Índice FAISS en memoria por sesión, para ficheros efímeros</td><td><span class="chip c-legacy">Legado</span></td></tr>
-            <tr><td class="mono">src/corpus_pipeline.py</td><td>Indexación del corpus: troceado semántico, jerarquía jurídica, enriquecimiento. Proceso <em>offline</em>, no forma parte del servicio</td><td><span class="chip c-off">Offline</span></td></tr>
+            <tr><td class="mono">src/chunking_v2.py</td><td>Troceado del corpus por unidad normativa (artículo, requisito NEIS, contenido GRI). Con él se construyó el índice v2. Proceso <em>offline</em></td><td><span class="chip c-off">Offline</span></td></tr>
+            <tr><td class="mono">src/corpus_pipeline.py</td><td>Pipeline anterior de indexación (troceado semántico, enriquecimiento). No se usó para el índice v2</td><td><span class="chip c-off">Offline</span></td></tr>
             <tr><td class="mono">src/rag_benchmark.py<br>src/kb_experiment.py</td><td>Medición de calidad de recuperación y experimento factorial de la línea de investigación</td><td><span class="chip c-res">Investigación</span></td></tr>
             <tr><td class="mono">public/chatbot/</td><td>Widget de chat: una página, una hoja de estilos y un script de ~1.900 líneas sin framework</td><td><span class="chip c-prod">Producción</span></td></tr>
             <tr><td class="mono">public/admin-panel/</td><td>Panel de experto en React con Material UI</td><td><span class="chip c-prod">Producción</span></td></tr>
@@ -318,7 +323,7 @@
 
       <div class="panel panel-note">
         <span class="panel-label">Una decisión que explica mucho del resto</span>
-        <p>El modelo de embeddings vive en el contenedor y <strong>debe ser el mismo con el que se indexó el corpus</strong>. Cambiarlo obliga a reindexar todo. Hoy es <code>all-MiniLM-L6-v2</code>, un modelo entrenado en inglés, sobre un corpus en español: es el compromiso heredado del primer montaje y la razón de que exista una línea de investigación sobre ello.</p>
+        <p>El modelo de embeddings vive en el contenedor y <strong>debe ser el mismo con el que se indexó el corpus</strong>; el umbral de similitud depende de ese modelo. Índice, modelo y umbral van siempre juntos y se fijan por revisión de Cloud Run: <code>recavai-corpus-v2</code> + <code>multilingual-e5-small</code> + 0,841. Hasta el 23/09/2026 era <code>all-MiniLM-L6-v2</code>, entrenado en inglés, que descartaba el 41 % del texto del corpus al vectorizarlo; su índice se conserva para poder volver atrás.</p>
       </div>
     </section>
 
@@ -328,6 +333,8 @@
 
       <h3>Asesor</h3>
       <p>Es el modo de consulta. El usuario pregunta, el sistema busca en el corpus y en los documentos que ese usuario haya subido, y responde. La respuesta lleva marcas <code>[1]</code>, <code>[2]</code>… que se corresponden con la lista de fragmentos que el backend devuelve en el campo <code>sources</code>, de modo que el usuario puede comprobar de dónde sale cada afirmación.</p>
+      <p>Desde el 23/09/2026 el asesor tiene un contrato de fidelidad: <strong>cada dato normativo —cifra, plazo, umbral, artículo, número de norma u obligación— tiene que estar en un fragmento</strong>, y si no está, el asesor dice que no consta en la documentación en lugar de completarlo de memoria. El consejo práctico que no sale de la norma va aparte, en una sección rotulada «Orientación práctica (no extraída de la normativa)».</p>
+      <p>Antes de servir cada respuesta, un control automático busca en ella cifras, fechas, artículos y números de norma que no aparezcan en los fragmentos. Si encuentra alguno, pide una reescritura; si aun así queda algo sin respaldo, la respuesta llega con una nota que dice qué dato no se ha podido verificar. Otro control avisa al modelo, antes de generar, cuando la pregunta nombra una ley que no está en el corpus o un artículo que no existe («artículo 52 de la CSDDD»). Con esto, las respuestas sin afirmaciones no respaldadas pasaron del 33 % al 90 %.</p>
 
       <h3>Auditor</h3>
       <p>Es el modo de entrevista. El sistema conduce una auditoría preliminar en ocho bloques temáticos. En cada turno recibe, inyectado en su prompt, el estado de la auditoría: qué bloques están cerrados, cuál está activo y qué resúmenes se han generado. Dispone de dos herramientas que puede invocar por su cuenta:</p>
@@ -421,15 +428,16 @@
           <tbody>
             <tr><td class="mono">1</td><td>Documentos del usuario (su espacio propio en Pinecone)</td><td class="mono">top_k = 6 · score mínimo 0,25</td></tr>
             <tr><td class="mono">2</td><td>FAISS en memoria (ficheros efímeros, legado)</td><td class="mono">top_k = 6 · score mínimo 0,30</td></tr>
-            <tr><td class="mono">3</td><td>Corpus normativo global</td><td class="mono">12 candidatos → score mínimo 0,55 → 6 resultados</td></tr>
+            <tr><td class="mono">3</td><td>Corpus normativo global</td><td class="mono">12 candidatos → score mínimo 0,841 → 6 resultados</td></tr>
+            <tr><td class="mono">4</td><td>Grafo normativo</td><td class="mono">≤ 3 por referencia explícita + ≤ 3 por remisión</td></tr>
           </tbody>
         </table>
       </div>
 
-      <p>El corpus global se consulta con un embudo: se piden doce candidatos, se descartan los que no llegan a 0,55 de similitud y se pasan como máximo seis al modelo. Los documentos del usuario aparecen siempre antes que el corpus, porque si alguien ha subido su propia política de sostenibilidad quiere que la respuesta hable de ella.</p>
+      <p>El corpus global se consulta con un embudo: se piden doce candidatos, se descartan los que no llegan a 0,841 de similitud y se pasan como máximo seis al modelo. El umbral está calibrado con las preguntas reales de los usuarios para que quede sin contexto la misma proporción que con el modelo anterior (8,4 %): con e5 todas las similitudes caen entre 0,85 y 0,90, y el 0,55 de antes no filtraría nada. Los documentos del usuario aparecen siempre antes que el corpus, porque si alguien ha subido su propia política de sostenibilidad quiere que la respuesta hable de ella.</p>
 
       <h3>Enrutado por tipo de pregunta</h3>
-      <p>Antes de buscar, el sistema clasifica la pregunta por las expresiones que contiene, y de ahí decide si además consulta el grafo de conocimiento:</p>
+      <p>El sistema sigue clasificando la pregunta por las expresiones que contiene. Desde que se retiró Neo4j la clasificación solo se registra; el grafo normativo se aplica a todas las preguntas:</p>
 
       <div class="scroll">
         <table>
@@ -443,49 +451,62 @@
         </table>
       </div>
 
-      <p>Cuando la estrategia es híbrida, se extraen del texto de la pregunta las entidades canónicas que el sistema conoce y se consulta Neo4j por sus relaciones —hasta cuarenta tripletas sujeto–relación–objeto—, que se añaden al contexto en una sección aparte. Es la parte más frágil del pipeline: depende de que la entidad aparezca escrita casi igual en la pregunta.</p>
+      <h3>Grafo normativo</h3>
+      <p>La instancia de Neo4j que figuraba en la configuración no existía, y la consulta fallaba en silencio: el sistema era RAG semántico puro. Se sustituyó por un grafo determinista construido del propio texto: 381 unidades normativas (artículos, anexos, requisitos NEIS, contenidos GRI) unidas por 408 referencias cruzadas («de conformidad con el artículo 8») y 24 modificaciones del texto consolidado. Hace dos cosas: si la pregunta nombra una unidad («artículo 9 de la CSDDD», «E1-6», «GRI 305-1») trae sus fragmentos directamente, porque los vectores no distinguen números; y añade hasta tres fragmentos de los artículos a los que remiten los recuperados.</p>
 
       <h3>Filtro por categoría</h3>
       <p>Si la pregunta menciona términos propios de la CSDDD o de GRI, la búsqueda se restringe a esa categoría documental. Si el filtro devuelve cero resultados, se repite la búsqueda sin filtro: es preferible una respuesta con fuentes de otra categoría que ninguna respuesta.</p>
 
       <h3>Presupuesto de contexto</h3>
-      <p>Los fragmentos se añaden mientras quepan en un presupuesto de <strong>180.000 caracteres</strong> para Gemini 2.5 Flash (540.000 si se usara Pro). Cada fragmento entra encabezado por su número, título, categoría, página y relevancia, y el mensaje final se cierra con la pregunta original. Ese encabezado numerado es lo que permite al modelo citar <code>[1]</code>, <code>[2]</code> y a la interfaz enlazar cada cita con su fuente.</p>
+      <p>Los fragmentos se añaden mientras quepan en un presupuesto de <strong>180.000 caracteres</strong> para Gemini 2.5 Flash (540.000 si se usara Pro). Cada fragmento entra encabezado por su número, documento, unidad normativa («Artículo 10 · Prevención de efectos adversos potenciales»), categoría, páginas y relevancia, y el mensaje final se cierra con la pregunta original. La unidad es lo que permite al modelo citar el artículo aunque el número no aparezca en el texto del fragmento. Ese encabezado numerado es lo que permite al modelo citar <code>[1]</code>, <code>[2]</code> y a la interfaz enlazar cada cita con su fuente.</p>
     </section>
 
     <!-- ================= 06 ================= -->
     <section id="s06">
       <div class="sec-head"><span class="sec-num">06</span><h2>Corpus y base de conocimiento</h2></div>
 
-      <p>El corpus reúne alrededor de 48 documentos en español: directivas y reglamentos europeos, estándares GRI, guías de la OCDE, un marco teórico y un glosario. Está indexado en Pinecone con 9.176 vectores.</p>
+      <p>El corpus reúne 69 documentos en español —1,2 millones de palabras y 2.955 páginas—: la CSDDD y la CSRD consolidadas a 18.03.2026, el Reglamento de las NEIS, dos análisis de los cambios del Ómnibus, un glosario, 41 estándares GRI, 11 guías de la OCDE, un marco teórico y 9 cuestionarios de auditoría. Los tres textos de EUR-Lex están en su última consolidación publicada.</p>
 
-      <div class="panel">
-        <span class="panel-label">Hallazgo medido, no estimado</span>
-        <p>Medido el 23 de septiembre de 2026 sobre los 9.176 vectores del índice: contienen el <strong>98,4 % del texto del corpus</strong>, con una mediana de 95 palabras por fragmento. El 63 % de los fragmentos tiene 50 palabras o más y entre todos reúnen el 94 % del texto; los fragmentos diminutos existen (un 11 % tiene cinco palabras o menos) pero apenas aportan el 0,1 %. Es decir: el índice cubre el corpus.</p>
-        <p style="margin-top:.6rem">Lo que sí es cierto es que los campos <code>entities</code> y <code>triplets</code> están vacíos pese a declararse en el esquema, y que <strong>el script que generó el índice no está en el repositorio</strong>, en ninguna rama ni en el historial: el índice no se puede reproducir.</p>
+      <div class="scroll">
+        <table>
+          <thead><tr><th></th><th>Índice v1 (hasta el 23/09/2026)</th><th>Índice v2 (actual)</th></tr></thead>
+          <tbody>
+            <tr><td>Índice</td><td class="mono">uclm-corpus-roma</td><td class="mono">recavai-corpus-v2</td></tr>
+            <tr><td>Vectores</td><td class="num">9.176</td><td class="num">8.127</td></tr>
+            <tr><td>Modelo</td><td class="mono">all-MiniLM-L6-v2 · 256 tokens</td><td class="mono">multilingual-e5-small · 512 tokens</td></tr>
+            <tr><td>Texto descartado al vectorizar</td><td class="num">41,2 %</td><td class="num">~0 %</td></tr>
+            <tr><td>Fragmentos con la página mal</td><td class="num">64 %</td><td class="num">1 %</td></tr>
+            <tr><td>Unidad normativa en metadatos</td><td>no</td><td>sí (2.793 fragmentos)</td></tr>
+            <tr><td>Pasaje de la respuesta recuperado (batería)</td><td class="num">35 %</td><td class="num">68 %</td></tr>
+          </tbody>
+        </table>
       </div>
 
-      <p>Ese hallazgo motivó dos piezas nuevas, ambas <em>fuera</em> del servicio en línea:</p>
+      <div class="panel">
+        <span class="panel-label">Por qué se cambió</span>
+        <p>El índice v1 cubría el corpus (98,4 % del texto), pero su modelo, entrenado en inglés, corta en 256 fragmentos de palabra y el español se parte en el doble que el inglés: el vector de casi la mitad de los fragmentos representaba solo su primer tercio. Además, el 64 % de los fragmentos decía estar en la página 1, así que las citas llevaban páginas falsas. Y el script que lo generó no estaba en el repositorio: no se podía reproducir.</p>
+      </div>
 
       <div class="cards">
         <div class="card">
           <span class="chip c-off">Offline</span>
-          <h5>corpus_pipeline.py</h5>
-          <p>Troceado semántico por puntos de ruptura (percentil 80), entre 350 y 1.800 caracteres, sin solape, que nunca cruza un encabezado. Detecta la jerarquía (Título, Capítulo, Artículo, y las unidades de GRI y ESRS), añade una cabecera contextual al vector sin alterar el texto citado, y opcionalmente genera resúmenes, palabras clave, entidades y proposiciones con un modelo.</p>
+          <h5>chunking_v2.py</h5>
+          <p>Trocea por unidad normativa —artículo, anexo, requisito de divulgación NEIS, contenido o tema GRI— y nunca cruza de una a otra. Dentro de cada unidad agrupa frases hasta unos 1.400 caracteres, con una frase de solape. Al vector se le antepone una cabecera («CSDDD · Artículo 10 · Prevención…») que no se guarda en el texto citado. Es determinista: no usa ningún modelo para decidir los cortes.</p>
         </div>
         <div class="card">
           <span class="chip c-res">Investigación</span>
           <h5>kb_experiment.py</h5>
-          <p>Experimento factorial que compara estrategias de troceado, modelos de embeddings, formulación literal o parafraseada y grafo normativo, con una métrica de precisión de cita a nivel de artículo.</p>
+          <p>Experimento factorial que compara estrategias de troceado, modelos de embeddings, formulación literal o parafraseada y grafo normativo, con una métrica de precisión de cita a nivel de artículo. Espera al conjunto de preguntas de los juristas.</p>
         </div>
       </div>
 
       <div class="panel panel-note">
-        <span class="panel-label">Cómo se ejecuta el pipeline</span>
-        <p>Es un proceso por lotes que se lanza <strong>una vez por versión del corpus</strong>, no un servicio. Reindexa por completo el espacio de nombres indicado. Nunca debe apuntarse al índice de producción sin haber pasado antes el benchmark: cambiar el troceado o el modelo invalida todos los vectores existentes.</p>
+        <span class="panel-label">Cómo se reconstruye</span>
+        <p>Se extrae el texto del corpus, se trocea y se vectoriza en local, y se carga en un índice <strong>nuevo</strong>, nunca sobre el que está sirviendo. Los identificadores son por documento, así que actualizar un documento no obliga a reindexar los demás. Después se regeneran el grafo y el registro de normas, que dependen de esos identificadores.</p>
       </div>
 
       <h3>Los PDF que sube el usuario siguen otro camino</h3>
-      <p>Cuando alguien adjunta un documento, no pasa por ese pipeline. Se extrae su texto, se trocea en ventanas fijas de 400 palabras con 50 de solape, hasta un máximo de 500 fragmentos, y se guardan en el espacio de nombres de ese usuario. En ese proceso se aplanan todas las páginas antes de trocear, de modo que los fragmentos resultantes <strong>no conservan el número de página</strong> —una diferencia real de calidad frente al corpus, que sí lo tiene.</p>
+      <p>Cuando alguien adjunta un documento, no pasa por ese pipeline. Se extrae su texto, se trocea en ventanas fijas de 250 palabras con 40 de solape (antes 400: no cabían en el límite del modelo), hasta un máximo de 500 fragmentos, y se guardan en el espacio de nombres de ese usuario. En ese proceso se aplanan todas las páginas antes de trocear, de modo que los fragmentos resultantes <strong>no conservan el número de página</strong> —una diferencia real de calidad frente al corpus, que sí lo tiene.</p>
     </section>
 
     <!-- ================= 07 ================= -->
@@ -526,7 +547,7 @@
     <section id="s08">
       <div class="sec-head"><span class="sec-num">08</span><h2>Modelo de datos</h2></div>
 
-      <p>Cuatro almacenes, cada uno con un propósito distinto: Firestore guarda el estado vivo, Pinecone los vectores, Neo4j las relaciones y BigQuery la traza analítica.</p>
+      <p>Tres almacenes y dos ficheros: Firestore guarda el estado vivo, Pinecone los vectores y BigQuery la traza analítica; el grafo normativo y el registro de normas viajan como ficheros dentro de la imagen.</p>
 
       <h4>Firestore</h4>
       <div class="scroll">
@@ -546,7 +567,7 @@
         <table>
           <thead><tr><th>Espacio</th><th>Qué guarda</th><th>Metadatos</th></tr></thead>
           <tbody>
-            <tr><td class="mono">(por defecto)</td><td>Corpus normativo: 9.176 vectores</td><td class="mono">text, source, page, total_pages, primary_category, block_type, entities, triplets, graph_importance</td></tr>
+            <tr><td class="mono">(por defecto)</td><td>Corpus normativo, índice <code>recavai-corpus-v2</code>: 8.127 vectores</td><td class="mono">text, source, page, page_end, total_pages, article, unit_label, section, primary_category, block_type, modifications</td></tr>
             <tr><td class="mono">&lt;uid&gt;</td><td>Documentos subidos por ese usuario</td><td class="mono">text, doc_id, filename, chunk_index, uploaded</td></tr>
           </tbody>
         </table>
@@ -556,8 +577,16 @@
       <h4>BigQuery</h4>
       <p>Una tabla de historial con un registro por turno: identificador, marca de tiempo, hilo, mensaje del usuario, respuesta del sistema, respuesta corregida por el experto, endpoint de origen e identidad del usuario. Es la base del panel de experto y la única fuente para analizar el uso a lo largo del tiempo.</p>
 
-      <h4>Neo4j</h4>
-      <p>Nodos <code>Entity</code> unidos por relaciones <code>RELATED</code> con un predicado. Se consulta por coincidencia de nombre con las entidades detectadas en la pregunta.</p>
+      <h4>Ficheros de datos en la imagen</h4>
+      <div class="scroll">
+        <table>
+          <thead><tr><th>Fichero</th><th>Contenido</th></tr></thead>
+          <tbody>
+            <tr><td class="mono">data/normative_graph.json</td><td>Grafo normativo: unidades con los vectores que las forman, referencias cruzadas y modificaciones. Sustituye a Neo4j</td></tr>
+            <tr><td class="mono">data/normas_corpus.json</td><td>Los 186 números de norma citados en el corpus. Lo usan los controles del asesor para distinguir una norma real de una inventada</td></tr>
+          </tbody>
+        </table>
+      </div>
     </section>
 
     <!-- ================= 09 ================= -->
@@ -571,13 +600,13 @@
         <dt>Orígenes</dt><dd>CORS con lista explícita de dominios —los dos de chat, los dos de panel y localhost— y credenciales habilitadas. Si la variable de entorno viene vacía o con comodín, se cae a la lista segura por defecto.</dd>
         <dt>Tasa</dt><dd>120 peticiones por minuto de forma global, más límites específicos por endpoint. Los más estrictos son los que cuestan dinero o escriben: chat, subida de ficheros y administración.</dd>
         <dt>Cabeceras</dt><dd><code>Cache-Control: no-store</code>, <code>X-Content-Type-Options: nosniff</code>, <code>X-Frame-Options: DENY</code>, <code>Referrer-Policy: no-referrer</code>.</dd>
-        <dt>Secretos</dt><dd>Claves de Gemini, Pinecone, BigQuery y Neo4j en Secret Manager, inyectadas como variables de entorno en el despliegue. El fichero <code>.env</code> local está excluido del control de versiones.</dd>
+        <dt>Secretos</dt><dd>Claves de Gemini, Pinecone y BigQuery en Secret Manager, inyectadas como variables de entorno en el despliegue. El fichero <code>.env</code> local está excluido del control de versiones.</dd>
       </dl>
 
       <div class="panel">
-        <span class="panel-label">Dos puertas que hoy están abiertas</span>
-        <p><strong>Las reglas de Firestore permiten lectura y escritura a cualquiera</strong> (<code>allow read, write: if true</code>), con un comentario que dice «mientras probamos en local». Si esas reglas están publicadas en el proyecto, cualquiera con la configuración del cliente puede leer todas las conversaciones.</p>
-        <p style="margin-top:.6rem">El endpoint <strong><code>/admin/ingest_document</code> no comprueba el rol de administrador</strong>: usa la verificación de usuario normal. Cualquier cuenta con email verificado puede insertar contenido en el corpus global que alimenta las respuestas de todos.</p>
+        <span class="panel-label">Dos puertas que estuvieron abiertas (cerradas)</span>
+        <p><strong>Reglas de Firestore.</strong> El fichero del repositorio concedía lectura y escritura a cualquiera, pero lo publicado en el proyecto era <code>allow read, write: if false</code>, que es lo correcto: todo el acceso pasa por el backend. El peligro era la divergencia —publicar el fichero habría abierto la base de datos—, y el fichero ya coincide con lo publicado.</p>
+        <p style="margin-top:.6rem"><strong><code>/admin/ingest_document</code></strong> aceptaba a cualquier usuario verificado; ahora exige el rol de administrador.</p>
       </div>
     </section>
 
@@ -586,12 +615,14 @@
       <div class="sec-head"><span class="sec-num">10</span><h2>Infraestructura</h2></div>
 
       <dl class="kv">
-        <dt>Cómputo</dt><dd>Cloud Run en <code>europe-west1</code>: 2 vCPU, 4 GiB, concurrencia 40, tiempo máximo 600 s. Se despliega sin autenticación de plataforma porque la autenticación la hace la aplicación.</dd>
-        <dt>Contenedor</dt><dd>Imagen en dos etapas. <code>torch</code> se instala en una capa propia desde el índice de solo-CPU de PyTorch (unos 200 MB en lugar de 532), de modo que cambiar el resto de dependencias no obliga a descargarlo otra vez. La imagen final corre como usuario sin privilegios, con comprobación de salud y Gunicorn con cuatro trabajadores.</dd>
+        <dt>Cómputo</dt><dd>Cloud Run en <code>europe-west1</code>: 2 vCPU, 4 GiB, concurrencia 16, tiempo máximo 600 s. Se despliega sin autenticación de plataforma porque la autenticación la hace la aplicación.</dd>
+        <dt>Contenedor</dt><dd>Imagen en dos etapas. <code>torch</code> se instala en una capa propia desde el índice de solo-CPU de PyTorch (unos 200 MB en lugar de 532), de modo que cambiar el resto de dependencias no obliga a descargarlo otra vez. El modelo de embeddings se descarga al construir y va dentro de la imagen, así que no depende de Hugging Face al arrancar. La imagen final corre como usuario sin privilegios, con comprobación de salud y Gunicorn con 2 procesos × 8 hilos: cada proceso carga el modelo (~1 GB) y 4 procesos no cabían en memoria.</dd>
         <dt>Integración continua</dt><dd>Cloud Build: construye y publica la imagen con caché embebida, despliega en Cloud Run, compila el panel de administración con npm y publica ambos sitios en Firebase Hosting. El paso de Firebase está marcado para no tumbar el despliegue del backend si falla.</dd>
         <dt>Hosting</dt><dd>Dos objetivos en el mismo proyecto: <code>chatbot</code> sirve la carpeta estática del widget; <code>admin-panel</code> sirve la compilación de React con reescritura a <code>index.html</code>.</dd>
         <dt>Funciones</dt><dd>Dos Cloud Functions en la misma región para el historial del panel: una consulta BigQuery con búsqueda opcional, otra actualiza la respuesta del experto.</dd>
-        <dt>Entornos</dt><dd>El fichero de build está parametrizado por nombre de servicio y alias de proyecto, con producción como valor por defecto y <code>-dev</code> como sufijo del entorno de desarrollo, que es el que está en uso.</dd>
+        <dt>Entornos</dt><dd>Un solo entorno vivo: <code>recava-auditor-dev</code> con el servicio <code>orchestrator-dev</code>. El proyecto de producción existe pero no tiene facturación. El despliegue por defecto es canario: la revisión nueva se prueba por su URL etiquetada y el tráfico se pasa con un paso aparte.</dd>
+        <dt>Configuración por revisión</dt><dd>Índice, modelo y umbral se fijan como variables de cada revisión (<code>RAG_INDEX_NAME</code>, <code>EMBEDDING_MODEL_NAME</code>, <code>RAG_MIN_SCORE</code>), no en un secreto compartido: así, volver a una revisión anterior recupera también su índice y su modelo.</dd>
+        <dt>Coste de Gemini</dt><dd>Las claves de producción y de desarrollo gastan del mismo crédito prepago. Una evaluación grande lo agotó el 23/09/2026 y producción dejó de responder hasta la recarga.</dd>
       </dl>
     </section>
 
@@ -599,54 +630,53 @@
     <section id="s11">
       <div class="sec-head"><span class="sec-num">11</span><h2>Calidad y evaluación</h2></div>
 
-      <p>Hasta ahora la calidad del sistema se juzgaba leyendo respuestas. Existe ya una medición reproducible: un conjunto de preguntas con su respuesta correcta y las fuentes donde está, contra el que se puede comparar cualquier cambio de arquitectura.</p>
+      <p>Cualquier cambio en la recuperación, el modelo o las instrucciones del asesor se mide antes y después con una batería de 60 preguntas en 13 tipos —definiciones, umbrales, artículos concretos, preguntas en lenguaje coloquial, cambios del Ómnibus, varios artículos a la vez, NEIS, GRI, guías sectoriales, cruce entre marcos, preguntas reales de usuarios, comprobaciones del modo auditor y trampas—. Cada pregunta lleva sus fuentes esperadas y los datos clave que una buena respuesta debe contener, localizados en el corpus. El banco de evaluación usa exactamente el mismo código que producción.</p>
 
       <div class="scroll">
         <table>
-          <thead><tr><th>Métrica</th><th>Qué mide</th><th class="num">Línea base</th></tr></thead>
+          <thead><tr><th>Medida (batería de 60 preguntas)</th><th class="num">Antes</th><th class="num">Ahora</th></tr></thead>
           <tbody>
-            <tr><td class="mono">hit@k</td><td>Al menos una fuente correcta entre las recuperadas</td><td class="num">0,80</td></tr>
-            <tr><td class="mono">recall@k</td><td>Proporción de fuentes correctas recuperadas</td><td class="num">0,65</td></tr>
-            <tr><td class="mono">precision@k</td><td>Proporción de lo recuperado que es relevante</td><td class="num">0,42</td></tr>
-            <tr><td class="mono">MRR</td><td>Posición de la primera fuente correcta</td><td class="num">0,51</td></tr>
+            <tr><td>Pasaje de la respuesta entre los fragmentos recuperados</td><td class="num">35 %</td><td class="num">68 %</td></tr>
+            <tr><td>Página correcta</td><td class="num">3 %</td><td class="num">60 %</td></tr>
+            <tr><td>Respuestas sin afirmaciones no respaldadas</td><td class="num">17 %</td><td class="num">90 %</td></tr>
+            <tr><td>Cifras, fechas y artículos inventados por respuesta</td><td class="num">0,42</td><td class="num">0</td></tr>
+            <tr><td>Trampas detectadas (artículo inexistente, término inventado, ley fuera del corpus)</td><td class="num">1 de 3</td><td class="num">3 de 3</td></tr>
+            <tr><td>Latencia típica / en los casos más lentos</td><td class="num">12 / 20 s</td><td class="num">8 / 15 s</td></tr>
           </tbody>
         </table>
       </div>
 
-      <p>La línea base se midió sobre el índice de producción con diez preguntas de arranque. Las preguntas conceptuales son con diferencia las peores: aciertan en la mitad de los casos. El conjunto debe crecer hasta unas cincuenta preguntas redactadas por juristas del instituto colaborador, con doble anotación independiente y acuerdo medido entre anotadores; ese trabajo tiene su propio plan de ocho semanas.</p>
+      <p>Las respuestas las puntúa un modelo juez que no sabe qué versión evalúa, y además se comparan por parejas a ciegas. Con 40 preguntas reales de usuarios que no se usaron para diseñar nada, el juez prefirió la versión nueva en 36 casos y la anterior en 4.</p>
 
-      <p>Además de las métricas de recuperación, el harness puede generar la respuesta y puntuarla con un modelo juez en tres ejes: si se apoya solo en lo recuperado, si coincide con la respuesta de referencia y si las citas apuntan a las fuentes esperadas.</p>
+      <div class="panel panel-note">
+        <span class="panel-label">Lo que esta batería no es</span>
+        <p>La escribió el equipo de desarrollo, no juristas, y sin doble anotación: sirve para decidir despliegues, no para publicar resultados. El conjunto de preguntas de referencia para el artículo sigue pendiente del taller con los juristas del instituto colaborador, con su propio plan de ocho semanas.</p>
+      </div>
     </section>
 
     <!-- ================= 12 ================= -->
     <section id="s12">
       <div class="sec-head"><span class="sec-num">12</span><h2>Deuda técnica</h2></div>
 
-      <p>Lo que sigue son problemas reales encontrados al leer el código, ordenados por severidad. Ninguno es hipotético.</p>
+      <p>Lo que sigue son problemas reales encontrados al leer el código o al medir el sistema, ordenados por severidad. Ninguno es hipotético. Los resueltos se mantienen al final, en verde, para que conste qué se hizo.</p>
 
       <div class="debt">
-        <div class="debt-item"><div class="sev sev-hi"></div><div class="debt-body">
-          <b>Las reglas de Firestore permiten todo a todo el mundo</b>
-          <p>El fichero de reglas concede lectura y escritura sin condición, con un comentario que indica que era para pruebas locales. Si está publicado, expone conversaciones, progreso de auditorías y metadatos de documentos.</p>
-          <span class="debt-meta">firestore.rules · comprobar primero qué reglas hay publicadas en el proyecto</span>
-        </div></div>
-
-        <div class="debt-item"><div class="sev sev-hi"></div><div class="debt-body">
-          <b>El endpoint de ingesta al corpus no exige administrador</b>
-          <p>Está bajo el prefijo <code>/admin/</code> y tiene su límite de tasa, pero valida con la comprobación de usuario corriente en vez de la de administrador. Cualquier cuenta verificada puede inyectar texto en la base documental común.</p>
-          <span class="debt-meta">app.py · /admin/ingest_document</span>
+        <div class="debt-item"><div class="sev sev-md"></div><div class="debt-body">
+          <b>Errores sustantivos que ningún control detecta</b>
+          <p>Los controles del asesor cazan cifras, fechas, artículos y normas sin respaldo, pero no una afirmación falsa sin ninguno de esos datos: en la batería, 3 de 60 respuestas contradicen un dato clave (por ejemplo, que habrá normas NEIS sectoriales obligatorias). Detectarlas exigiría verificar frase a frase con un segundo modelo.</p>
+          <span class="debt-meta">src/agent/guardrails.py · capa 4 no implantada</span>
         </div></div>
 
         <div class="debt-item"><div class="sev sev-md"></div><div class="debt-body">
-          <b>El índice de producción no se puede reproducir</b>
-          <p>El script que lo generó no está en el repositorio, en ninguna rama ni en el historial. El índice cubre el corpus (98,4 % del texto, mediana de 95 palabras por fragmento), así que no es urgente reindexar, pero nadie puede reconstruirlo ni explicar con qué criterio se troceó. El pipeline de sustitución está escrito y probado.</p>
-          <span class="debt-meta">índice uclm-corpus-roma · corpus_pipeline.py listo para ejecutar</span>
+          <b>Los encargos de redacción se resuelven resumiendo</b>
+          <p>Cuando se pide redactar cláusulas contractuales o una guía de auditoría paso a paso, el asesor resume la norma en vez de redactar. Hace falta decidir si debe redactar documentos y, si es así, una habilidad propia que genere la plantilla citando los requisitos.</p>
+          <span class="debt-meta">src/agent/skills · decisión de producto</span>
         </div></div>
 
         <div class="debt-item"><div class="sev sev-md"></div><div class="debt-body">
-          <b>Modelo de embeddings en inglés sobre corpus en español</b>
-          <p><code>all-MiniLM-L6-v2</code> se eligió en el primer montaje y no puede cambiarse sin reindexar. Cuantificar cuánto cuesta esa elección es una de las hipótesis de la línea de investigación.</p>
-          <span class="debt-meta">src/config.py · EMBEDDING_MODEL_NAME</span>
+          <b>Crédito de Gemini compartido entre producción y desarrollo</b>
+          <p>Las dos claves gastan del mismo saldo prepago. Una evaluación lo agotó y producción dejó de responder. Conviene activar la recarga automática y usar una clave de otro proyecto para evaluar.</p>
+          <span class="debt-meta">AI Studio · facturación</span>
         </div></div>
 
         <div class="debt-item"><div class="sev sev-md"></div><div class="debt-body">
@@ -656,15 +686,21 @@
         </div></div>
 
         <div class="debt-item"><div class="sev sev-md"></div><div class="debt-body">
-          <b>El widget desplegado es anterior al del repositorio</b>
-          <p>La corrección que hace visible el fallo de inicio de sesión cuando un bloqueador impide cargar Firebase está en el código pero no en el sitio publicado.</p>
-          <span class="debt-meta">public/chatbot/bubble-prod-script.js</span>
+          <b>La revisión se da por lista antes de que la aplicación cargue</b>
+          <p>Cloud Run considera lista la instancia en cuanto el servidor abre el puerto, antes de que Python termine de importar. Sin tráfico, la CPU se estrangula y el primer usuario espera unos 40 segundos. Una sonda de arranque contra <code>/health</code> lo evitaría.</p>
+          <span class="debt-meta">Dockerfile · Cloud Run</span>
         </div></div>
 
         <div class="debt-item"><div class="sev sev-lo"></div><div class="debt-body">
-          <b>El README describe una arquitectura que ya no existe</b>
-          <p>Habla de OpenAI Assistants y de un orquestador con el SDK de agentes. El sistema usa Gemini con llamadas a herramientas desde hace meses. Es lo primero que lee quien llega nuevo.</p>
-          <span class="debt-meta">README.md</span>
+          <b>Categorías documentales heredadas incoherentes</b>
+          <p>El índice v2 conservó las categorías de v1 para que la comparación midiera solo el troceado. Algunas son erróneas (la guía OCDE de agricultura figura como «GRI»), y el filtro por categoría las usa.</p>
+          <span class="debt-meta">data/categorias_v1.json</span>
+        </div></div>
+
+        <div class="debt-item"><div class="sev sev-lo"></div><div class="debt-body">
+          <b>El widget desplegado puede ser anterior al del repositorio</b>
+          <p>La corrección que hace visible el fallo de inicio de sesión cuando un bloqueador impide cargar Firebase está en el código; hay que comprobar si ya se publicó.</p>
+          <span class="debt-meta">public/chatbot/bubble-prod-script.js</span>
         </div></div>
 
         <div class="debt-item"><div class="sev sev-lo"></div><div class="debt-body">
@@ -675,31 +711,32 @@
 
         <div class="debt-item"><div class="sev sev-lo"></div><div class="debt-body">
           <b>FAISS sigue inicializándose sin usarse apenas</b>
-          <p>Los documentos subidos van a Pinecone desde que se hicieron permanentes, pero el almacén en memoria se sigue creando al arrancar y se consulta en cada búsqueda. Ocupa memoria y complica el flujo.</p>
+          <p>Los documentos subidos van a Pinecone desde que se hicieron permanentes, pero el almacén en memoria se sigue creando al arrancar y se consulta en cada búsqueda.</p>
           <span class="debt-meta">src/local_vector_store.py · src/context_orchestrator.py</span>
         </div></div>
 
         <div class="debt-item"><div class="sev sev-lo"></div><div class="debt-body">
           <b>Orden de decoradores del limitador sin verificar</b>
-          <p>El límite se declara encima de la ruta, no debajo. La librería registra los límites por nombre de función, así que probablemente se aplican, pero conviene comprobarlo con una prueba antes que asumirlo.</p>
+          <p>El límite se declara encima de la ruta, no debajo. Probablemente se aplica, pero conviene comprobarlo con una prueba antes que asumirlo.</p>
           <span class="debt-meta">app.py · todos los endpoints con @limiter.limit</span>
         </div></div>
 
-        <div class="debt-item"><div class="sev sev-lo"></div><div class="debt-body">
-          <b>Ficheros de trabajo en la raíz del repositorio</b>
-          <p><code>firestore-debug.log</code>, <code>bubble_tmp.bin</code>, <code>temp.js</code> y scripts de prueba sueltos conviven con el código de producción.</p>
-          <span class="debt-meta">raíz del repositorio</span>
+        <div class="debt-item"><div class="sev sev-ok"></div><div class="debt-body">
+          <b>Resuelto el 23/09/2026 · Índice, modelo y grafo</b>
+          <p>Modelo inglés que descartaba el 41 % del texto, 64 % de páginas erróneas, palabras partidas por guiones de EUR-Lex, índice imposible de reproducir y grafo Neo4j inexistente: todo sustituido por el índice v2, el troceado por unidad normativa y el grafo en memoria.</p>
+          <span class="debt-meta">recavai-corpus-v2 · src/chunking_v2.py · src/normative_graph.py</span>
         </div></div>
-      </div>
 
-      <div class="panel panel-note">
-        <span class="panel-label">Orden sugerido</span>
-        <p>Primero las dos entradas de severidad alta, que son de seguridad y se arreglan en minutos. Después el reindexado del corpus con el pipeline nuevo, midiendo antes y después con el benchmark: es el cambio con mayor efecto sobre la calidad percibida de las respuestas.</p>
+        <div class="debt-item"><div class="sev sev-ok"></div><div class="debt-body">
+          <b>Resuelto · Seguridad y repositorio</b>
+          <p>Reglas de Firestore alineadas con lo publicado, ingesta al corpus restringida a administradores, README actualizado y ficheros de trabajo retirados de la raíz.</p>
+          <span class="debt-meta">firestore.rules · app.py · README.md</span>
+        </div></div>
       </div>
     </section>
 
     <footer>
-      Documentación generada a partir del código de la rama de trabajo el 19 de septiembre de 2026. Las cifras del corpus y de la línea base proceden de mediciones sobre el índice de producción, no de estimaciones. La especificación equivalente en formato legible por máquina, para desarrollo dirigido por especificación, está en <code>docs/SPEC.md</code>.
+      Documentación generada a partir del código de la rama de trabajo el 19 de septiembre de 2026 y actualizada el 23 de septiembre de 2026. Las cifras del corpus, de los índices y de la evaluación proceden de mediciones, no de estimaciones. La especificación equivalente en formato legible por máquina, para desarrollo dirigido por especificación, está en <code>docs/SPEC.md</code>.
     </footer>
 
   </main>

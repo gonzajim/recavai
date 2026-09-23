@@ -1,6 +1,6 @@
 # Despliegue
 
-Estado comprobado el 19 de septiembre de 2026 contra la infraestructura real.
+Estado comprobado el 19 de septiembre de 2026 contra la infraestructura real; actualizado el 23 de septiembre con el índice v2, el grafo en memoria y el agente asesor.
 
 ## 1. Qué entornos existen de verdad
 
@@ -66,9 +66,50 @@ Y si algo va mal:
 ### Qué probar en la URL canaria antes de promover
 
 1. `GET /health` responde.
-2. Modo auditor: recorre las seis preguntas obligatorias del bloque 1 sin repetir ninguna.
-3. En el bloque 4, responder *«tenemos buzón ético pero solo para empleados»* debe producir un aviso de brecha con la norma y la recomendación.
-4. El bloque no se cierra mientras queden preguntas pendientes.
+2. En los registros de arranque de la revisión: `Grafo normativo cargado`, `Pinecone index connected via 'recavai-corpus-v2'` y `SentenceTransformer 'intfloat/multilingual-e5-small' loaded`. El servicio carga las habilidades y el grafo al arrancar: si faltan, la instancia no arranca (mejor eso que fallar en la primera pregunta).
+3. Asesor: «¿Qué establece el artículo 10 de la CSDDD?» cita el artículo 10 con su página; «¿Qué dice la Ley 11/2018?» responde que no la tiene en la documentación.
+4. Modo auditor: recorre las seis preguntas obligatorias del bloque 1 sin repetir ninguna.
+5. En el bloque 4, responder *«tenemos buzón ético pero solo para empleados»* debe producir un aviso de brecha con la norma (art. 14 de la CSDDD) y la recomendación.
+6. El bloque no se cierra mientras queden preguntas pendientes.
+
+Además, antes de cualquier cambio en la recuperación o en las habilidades, la batería de
+evaluación (`benchmarks/README.md`) contra la configuración anterior. Es la regla `QA-5`
+del SPEC.
+
+### Índice, modelo y umbral se fijan por revisión
+
+El índice de Pinecone, el modelo de *embeddings* y el umbral de similitud **van juntos**:
+un índice construido con un modelo solo se puede consultar con ese modelo, y el umbral
+depende de la escala de similitudes del modelo. Por eso los tres se fijan como variables
+de entorno de cada revisión (`RAG_INDEX_NAME`, `EMBEDDING_MODEL_NAME`, `RAG_MIN_SCORE`) y
+no en el secreto `PINECONE_INDEX_NAME`, que las revisiones leen como «latest»: si se
+cambiara el índice en el secreto, **una vuelta atrás a una revisión anterior leería el
+índice nuevo con el modelo viejo** y la búsqueda devolvería basura sin dar error.
+
+| Configuración | Índice | Modelo | Umbral | Revisiones |
+|---|---|---|---|---|
+| v1 | `uclm-corpus-roma` (9.176 vectores) | `all-MiniLM-L6-v2` | 0,55 (por defecto) | hasta `00056-loh` |
+| v2 | `recavai-corpus-v2` (8.127 vectores) | `intfloat/multilingual-e5-small` | 0,841 | desde `00060-rax` (23/09/2026) |
+
+Los dos índices tienen activada la protección contra borrado. El v1 se conserva para
+poder volver atrás.
+
+### Capacidad
+
+e5-small ocupa unos 1.000 MB por proceso (MiniLM, 480). Con 4 procesos no cabía en los
+4 GiB del servicio, así que la imagen arranca **2 procesos × 8 hilos** (`gthread`): 16
+peticiones simultáneas, frente a 4 con los 4 procesos anteriores, porque casi todo el
+tiempo de una petición es espera a Gemini. `--concurrency=16` en Cloud Run para que
+escale en instancias en vez de encolar.
+
+El modelo va **dentro de la imagen** (`HF_HOME=/opt/hf`, `HF_HUB_OFFLINE=1`): no se
+descarga de Hugging Face al arrancar.
+
+**Limitación conocida del arranque.** Cloud Run da la revisión por lista en cuanto
+gunicorn abre el puerto, antes de que Python termine de importar. Una instancia recién
+creada sin tráfico tiene la CPU estrangulada y la carga puede tardar minutos; la primera
+petición real tarda unos 35-45 s. Se mitigaría con una sonda de arranque HTTP contra
+`/health` o con `--min-instances=1` (con coste).
 
 ### Por qué el hosting va después y aparte
 
@@ -79,13 +120,13 @@ Si se publicase el frontend a la vez que se despliega la revisión canaria, el 1
 `recava-auditor-prod` existe pero está vacío. Para usarlo hay que, por este orden:
 
 1. Habilitar facturación en el proyecto.
-2. Crear los secretos: `GEMINI_API_KEY`, `PINECONE_API_KEY`, `PINECONE_INDEX_NAME`, `BIGQUERY_DATASET_ID`, `BIGQUERY_TABLE_ID`, `NEO4J_PASSWORD`.
-3. Crear el índice de Pinecone de producción e indexarlo con `src/corpus_pipeline.py` — o decidir explícitamente que ambos entornos comparten índice.
+2. Crear los secretos: `GEMINI_API_KEY`, `PINECONE_API_KEY`, `PINECONE_INDEX_NAME`, `BIGQUERY_DATASET_ID`, `BIGQUERY_TABLE_ID`. (Neo4j se retiró el 23/09/2026.)
+3. Crear el índice de Pinecone de producción e indexarlo con el troceado v2 (`scripts/build_memory_index.py --chunker-v2` y `scripts/upsert_index_v2.py`) — o decidir explícitamente que ambos entornos comparten índice. El plan gratuito de Pinecone solo admite `us-east-1`.
 4. Crear el dataset y la tabla de BigQuery.
 5. Crear el servicio Cloud Run `orchestrator-prod` y los sitios de Firebase Hosting, y corregir el alias: `.firebaserc` apuntaba el alias `prod` al proyecto `recava-auditor`, **que no existe**; ahora apunta a `recava-auditor-prod`.
 6. Configurar Firebase Authentication con su propio conjunto de usuarios.
 7. Añadir los orígenes de producción a `CORS_ORIGINS`.
-8. Revisar `firestore.rules`: las reglas actuales conceden lectura y escritura a cualquiera (ver `DEBT-1` en `SPEC.md`). No deben llegar a producción tal cual.
+8. Publicar `firestore.rules` del repositorio (`allow read, write: if false`: todo el acceso va por el Admin SDK del orquestador). Hasta el 23/09/2026 el fichero decía `if true`, aunque lo publicado en dev era `if false`.
 
 Hasta que eso exista, `./scripts/deploy.sh canary prod` pide confirmación y avisa de que el entorno no está operativo.
 
@@ -112,6 +153,18 @@ Obsérvese `_TRAFFIC=canary`: un *push* a `main` construiría y dejaría la revi
 - Cada respuesta evaluable añade una llamada a Gemini con recuperación: una auditoría completa pasa de unas 40 llamadas a unas 70. Sube la latencia por turno y el coste por auditoría.
 - El widget publicado es anterior a HEAD: al publicar hosting suben también el aviso de fallo de inicio de sesión y la gestión de documentos persistentes, no solo los cambios del auditor.
 
+## 5.1 Coste de Gemini y crédito compartido
+
+La clave de Gemini de producción y la del `.env` local son distintas pero **gastan del
+mismo crédito prepago de AI Studio**. El 23/09/2026 una evaluación con ~1.100 llamadas lo
+agotó y producción respondió 402 hasta que se recargó. Para evitarlo:
+
+- Activar la recarga automática del crédito en AI Studio (facturación del proyecto).
+- Usar para evaluaciones una clave de **otro proyecto**, con su propio saldo.
+- Antes de lanzar una evaluación grande, calcular las llamadas: una pasada de la batería
+  son 60 generaciones + 60 juicios; una comparación por parejas, 60 juicios más.
+- `gemini-3.1-pro-preview` tiene además un límite duro de 250 peticiones al día por modelo.
+
 ## 6. Variables y secretos
 
 Los secretos se inyectan desde Secret Manager en el despliegue (`--update-secrets`), nunca se escriben en el repositorio. Las variables no sensibles van en `--set-env-vars` desde las sustituciones de `cloudbuild.yaml`. Para el entorno local, ver [`DESARROLLO.md`](DESARROLLO.md).
@@ -119,12 +172,18 @@ Los secretos se inyectan desde Secret Manager en el despliegue (`--update-secret
 | Variable | Origen | Nota |
 |---|---|---|
 | `GEMINI_API_KEY` | Secret Manager | Obligatoria: sin ella el servicio no arranca |
-| `PINECONE_API_KEY`, `PINECONE_INDEX_NAME` | Secret Manager | Sin ellas el RAG queda desactivado |
+| `PINECONE_API_KEY`, `PINECONE_INDEX_NAME` | Secret Manager | Sin ellas el RAG queda desactivado. El secreto del índice solo se usa si falta `RAG_INDEX_NAME` |
 | `BIGQUERY_DATASET_ID`, `BIGQUERY_TABLE_ID` | Secret Manager | Obligatorias al arrancar |
-| `NEO4J_PASSWORD` | Secret Manager | Sin ella se omiten las consultas al grafo |
-| `EMBEDDING_MODEL_NAME` | Sustitución | **Debe coincidir con el modelo que construyó el índice** |
-| `NEO4J_URI`, `NEO4J_USERNAME`, `NEO4J_DATABASE` | Sustitución | |
+| `RAG_INDEX_NAME` | Sustitución `_RAG_INDEX` | Índice de Pinecone de esta revisión (`recavai-corpus-v2`) |
+| `EMBEDDING_MODEL_NAME` | Sustitución `_EMBEDDING_MODEL` | **Debe coincidir con el modelo que construyó el índice**; también se hornea en la imagen |
+| `RAG_MIN_SCORE` | Sustitución `_RAG_MIN_SCORE` | Umbral de similitud calibrado para el modelo (0,841 con e5-small) |
+| `RAG_NORMATIVE_GRAPH` | Sustitución `_RAG_GRAPH` | Ruta del grafo en la imagen; vacío lo desactiva |
+| `RAG_NORM_REGISTRY` | Opcional | Ruta alternativa del registro de normas (por defecto `data/normas_corpus.json`) |
 | `CORS_ORIGINS` | Opcional | Si falta, se usa la lista segura por defecto |
+
+`cloudbuild.yaml` retira el secreto `NEO4J_PASSWORD` de la revisión (`--remove-secrets`) y
+sustituye todas las variables normales (`--set-env-vars`), así que las `NEO4J_*` de las
+revisiones antiguas no pasan a las nuevas.
 
 ## 7. Diagnosticar un problema con los logs
 
@@ -133,7 +192,8 @@ Los secretos se inyectan desde Secret Manager en el despliegue (`--update-secret
 ./scripts/logs.sh errors         # solo errores y trazas
 ./scripts/logs.sh tail           # en vivo
 ./scripts/logs.sh auditor        # registros, cierres y veredictos del auditor
-./scripts/logs.sh rag            # enrutado y recuperación
+./scripts/logs.sh rag            # enrutado, recuperación y grafo normativo
+./scripts/logs.sh agente         # turnos del asesor: avisos, reparaciones, respuestas anotadas
 ./scripts/logs.sh slow 5000      # peticiones de más de 5 s
 ./scripts/logs.sh req  7e3287bd68d1                              # una petición
 ./scripts/logs.sh thread d839f31f-4e8f-4583-9d2c-b72623dd13b5    # una conversación
@@ -158,6 +218,20 @@ complete_audit_block RECHAZADO: thread=abc block=block_1 3/6
 ```
 El modelo intentó cerrar un bloque a medias y el servidor se lo impidió. **Esto es el sistema funcionando**, no un error.
 
-### Limitación conocida del registro
+### Qué significan las líneas del asesor
 
-Cuando Gemini devuelve una respuesta sin contenido, el log dice `Could not extract text from Gemini response` pero **no registra el `finish_reason`**, que es justo el dato que diría por qué: límite de tokens agotado por el razonamiento interno, filtro de seguridad, u otra causa. Mientras no se añada, ese fallo no es diagnosticable del todo.
+```
+{"evt": "agent_turn", "task": "asesor", "skills_version": "f4faec66b2", "avisos": ["referencia_desconocida"],
+ "violaciones_borrador": 2, "violaciones_final": 0, "reparada": true, "anotada": false, "ms": {...}}
+```
+Una por turno del asesor (chat, herramienta del auditor o verificación). `avisos`: la
+pregunta nombraba una norma o un artículo que no existe, o no se recuperó nada.
+`reparada`: el control de salida encontró datos sin respaldo y se reescribió la respuesta.
+`anotada`: **se sirvió con una nota de datos no verificados** — es la que conviene revisar.
+`skills_version` identifica las instrucciones exactas con que se generó (ver `docs/AGENTE.md`).
+
+### Respuestas vacías de Gemini
+
+Cuando Gemini devuelve una respuesta sin texto, el log registra la causa (`finish_reason`,
+tokens de razonamiento, bloqueo de seguridad) y el servicio reintenta una vez sin
+razonamiento interno. Buscar `Respuesta vacía de Gemini`.
