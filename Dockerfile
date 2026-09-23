@@ -33,6 +33,13 @@ RUN python3 -m venv /opt/venv && \
 COPY requirements.txt requirements.txt
 RUN /opt/venv/bin/pip install --no-cache-dir -r requirements.txt
 
+# --- Capa 3: modelo de embeddings dentro de la imagen ---
+# Sin esto se descargaba de Hugging Face en cada arranque en frío (e5-small: 471 MB), y
+# si Hugging Face no respondía, la instancia no arrancaba.
+ARG EMBEDDING_MODEL=intfloat/multilingual-e5-small
+ENV HF_HOME=/opt/hf
+RUN /opt/venv/bin/python -c "from sentence_transformers import SentenceTransformer; SentenceTransformer('${EMBEDDING_MODEL}')"
+
 # ---- Final Stage ----
 FROM python:3.10-slim
 
@@ -51,11 +58,16 @@ RUN groupadd --gid ${APP_USER_GID} appgroup && \
     useradd --uid ${APP_USER_UID} --gid ${APP_USER_GID} --create-home --shell /sbin/nologin appuser
 
 COPY --from=builder --chown=appuser:appgroup /opt/venv /opt/venv
+COPY --from=builder --chown=appuser:appgroup /opt/hf /opt/hf
+# El modelo va en la imagen: no se consulta Hugging Face al arrancar.
+ENV HF_HOME=/opt/hf \
+    HF_HUB_OFFLINE=1
 
 WORKDIR /app
 
 COPY --chown=appuser:appgroup app.py ./
 COPY --chown=appuser:appgroup src/ ./src/
+COPY --chown=appuser:appgroup data/normative_graph.json ./data/normative_graph.json
 
 USER appuser
 
@@ -64,4 +76,7 @@ EXPOSE 8080
 HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
     CMD curl -f http://localhost:${PORT}/health || exit 1
 
-CMD ["sh", "-c", "/opt/venv/bin/gunicorn app:app --bind \"0.0.0.0:${PORT}\" --workers 4 --timeout 120 --access-logfile - --error-logfile -"]
+# 2 procesos × 8 hilos. Cada proceso carga su copia del modelo: con e5-small son ~1 GB por
+# proceso, así que 4 procesos no caben en 4 GiB. Las peticiones pasan casi todo el tiempo
+# esperando a Gemini, así que los hilos dan más concurrencia (16) que 4 procesos (4).
+CMD ["sh", "-c", "/opt/venv/bin/gunicorn app:app --bind \"0.0.0.0:${PORT}\" --workers 2 --threads 8 --worker-class gthread --timeout 120 --access-logfile - --error-logfile -"]

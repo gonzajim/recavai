@@ -12,13 +12,31 @@ import uuid
 from src.config import logger
 
 
-def generate_embedding(embed_model, text: str) -> list[float]:
-    """Encodes text using the pre-loaded SentenceTransformer model."""
-    vector = embed_model.encode(text, normalize_embeddings=True)
+def _e5_prefix(embed_model, is_query: bool) -> str:
+    """Los modelos de la familia e5 exigen prefijar el texto: 'query: ' en las consultas y
+    'passage: ' en los documentos. Sin prefijo rinden muy por debajo de lo que deben.
+    MiniLM y el resto no llevan prefijo. El nombre del modelo sale de EMBEDDING_MODEL_NAME,
+    que es también lo que carga src/config.py."""
+    name = (getattr(embed_model, "recava_model_name", None)
+            or os.getenv("EMBEDDING_MODEL_NAME", "")).lower()
+    if "e5" not in name:
+        return ""
+    return "query: " if is_query else "passage: "
+
+
+def generate_embedding(embed_model, text: str, is_query: bool = True) -> list[float]:
+    """Encodes text using the pre-loaded SentenceTransformer model.
+
+    is_query=False para texto que se va a INDEXAR (fragmentos de documentos): con e5 cambia
+    el prefijo, y un fragmento indexado como consulta queda en otra zona del espacio."""
+    vector = embed_model.encode(_e5_prefix(embed_model, is_query) + text, normalize_embeddings=True)
     return vector.tolist()
 
 
-_MIN_SCORE = 0.55      # Discard chunks below this cosine similarity
+# Umbral de similitud. Depende del modelo: 0,55 está ajustado a all-MiniLM-L6-v2; con e5
+# las similitudes se concentran en 0,85-0,90 y hay que calibrarlo
+# (scripts/calibrate_threshold.py). Se fija por revisión con RAG_MIN_SCORE.
+_MIN_SCORE = float(os.getenv("RAG_MIN_SCORE", "0.55"))
 _CANDIDATE_K = 12     # Retrieve this many candidates before score-filtering
 _MAX_RESULTS = 6      # Cap on chunks passed to the LLM after filtering
 
@@ -68,6 +86,10 @@ def search_documents(
                 "score": score,
                 "page": meta.get("page"),
                 "total_pages": meta.get("total_pages"),
+                # Solo en el índice v2 (src/chunking_v2.py): unidad normativa y página final.
+                "page_end": meta.get("page_end"),
+                "article": meta.get("article"),
+                "unit_label": meta.get("unit_label"),
             })
 
         return results[:_MAX_RESULTS]
@@ -91,7 +113,7 @@ def upsert_user_file_chunks(
     """Embeds and upserts all chunks of a user file into the user's Pinecone namespace."""
     vectors = []
     for i, chunk in enumerate(chunks):
-        embedding = generate_embedding(embed_model, chunk)
+        embedding = generate_embedding(embed_model, chunk, is_query=False)
         vectors.append({
             "id": f"{doc_id}_{i:05d}",
             "values": embedding,
@@ -153,7 +175,7 @@ def ingest_document(
         raise RuntimeError("Pinecone index is not configured.")
 
     doc_id = doc_id or str(uuid.uuid4())
-    embedding = generate_embedding(embed_model, content)
+    embedding = generate_embedding(embed_model, content, is_query=False)
     pinecone_index.upsert(vectors=[{
         "id": doc_id,
         "values": embedding,
@@ -253,118 +275,19 @@ def classify_question(query: str) -> str:
 
 
 def get_routing_strategy(question_type: str) -> str:
-    """Returns 'hybrid' (Pinecone + Neo4j) or 'semantic' (Pinecone only)."""
+    """Returns 'hybrid' or 'semantic'. Solo informativo desde que se retiró Neo4j: el grafo
+    normativo (src/normative_graph.py) se aplica a todas las preguntas cuando está activado."""
     return _ROUTING.get(question_type, "semantic")
-
-
-# ---------------------------------------------------------------------------
-# Neo4j graph retrieval (GraphRAG)
-# ---------------------------------------------------------------------------
-
-_CANONICAL_ENTITIES = sorted([
-    "CSDDD", "CSRD", "EUDR", "ESRS", "REACH", "EMAS",
-    "GRI", "OIT", "OCDE", "ISO 26000", "Basilea",
-    "Directiva de Debida Diligencia", "Directiva de Deforestación",
-    "due diligence", "diligencia debida",
-    "cadena de suministro", "cadena de valor",
-    "derechos humanos", "trabajo forzoso",
-    "sostenibilidad", "greenwashing",
-    "deforestación", "biodiversidad",
-    "huella de carbono", "emisiones GEI", "neutralidad carbono",
-    "comercio justo", "ecodiseño",
-    "certificación", "auditoría social",
-    "salario adecuado", "protección social",
-    "brecha salarial", "igualdad de género",
-    "economía circular", "residuos peligrosos",
-    "pesca sostenible", "productos orgánicos",
-    "sustancias químicas", "embalajes",
-], key=len, reverse=True)
-
-_neo4j_driver = None
-
-
-def _get_neo4j_driver():
-    global _neo4j_driver
-    if _neo4j_driver is not None:
-        return _neo4j_driver
-    uri = os.getenv("NEO4J_URI")
-    user = os.getenv("NEO4J_USERNAME", "neo4j")
-    pwd = os.getenv("NEO4J_PASSWORD")
-    if not uri or not pwd:
-        return None
-    try:
-        from neo4j import GraphDatabase
-        _neo4j_driver = GraphDatabase.driver(uri, auth=(user, pwd))
-        logger.info("Neo4j driver initialized (uri=%s).", uri)
-    except Exception as exc:
-        logger.error("Neo4j driver init failed: %s", exc)
-    return _neo4j_driver
-
-
-def _extract_entities(query: str) -> list:
-    q = query.lower()
-    return [e for e in _CANONICAL_ENTITIES if e.lower() in q]
-
-
-_GRAPH_CYPHER = """
-MATCH (n:Entity)
-WHERE any(e IN $entities WHERE toLower(n.name) CONTAINS toLower(e))
-OPTIONAL MATCH (n)-[r:RELATED]->(related:Entity)
-RETURN n.name AS subject, r.predicate AS relation, related.name AS object
-ORDER BY n.name
-LIMIT 40
-"""
-
-
-def get_graph_context(query: str, char_budget: int = 6000) -> str:
-    """
-    Retrieves relationship triples from Neo4j for canonical entities found in query.
-    Returns empty string if Neo4j is not configured or no entities match.
-    """
-    driver = _get_neo4j_driver()
-    if not driver:
-        return ""
-
-    entities = _extract_entities(query)
-    if not entities:
-        logger.info("Graph RAG: no canonical entities detected in query.")
-        return ""
-
-    db = os.getenv("NEO4J_DATABASE", "neo4j")
-    logger.info("Graph RAG: entities=%s db=%s", entities, db)
-    try:
-        with driver.session(database=db) as session:
-            results = session.run(_GRAPH_CYPHER, entities=entities)
-            seen: set = set()
-            triples: list = []
-            for record in results:
-                subj = record["subject"] or ""
-                rel = record["relation"] or ""
-                obj = record["object"] or ""
-                line = f"{subj} --[{rel}]--> {obj}" if rel else subj
-                if line not in seen:
-                    seen.add(line)
-                    triples.append(line)
-
-        if not triples:
-            logger.info("Graph RAG: no triples found for entities=%s", entities)
-            return ""
-
-        body = "RELACIONES JURÍDICAS EN EL GRAFO DE CONOCIMIENTO:\n" + "\n".join(triples)
-        logger.info("Graph RAG: %d triples recovered.", len(triples))
-        return body[:char_budget]
-
-    except Exception:
-        logger.error("Graph RAG query failed", exc_info=True)
-        return ""
 
 
 # ---------------------------------------------------------------------------
 # PDF extraction + chunking (for /upload_document endpoint)
 # ---------------------------------------------------------------------------
 
-_CHUNK_WORDS = 400
-_CHUNK_OVERLAP = 50
+# 250 palabras ≈ 1.600 caracteres ≈ 350 tokens de e5: cabe en su límite de 512. Con 400
+# (≈ 800 tokens en español) los documentos subidos se truncaban al embeberlos (DEBT-13).
+_CHUNK_WORDS = 250
+_CHUNK_OVERLAP = 40
 _MAX_CHUNKS = 500   # guard against very large PDFs
 
 

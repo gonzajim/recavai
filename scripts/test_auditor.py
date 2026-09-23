@@ -34,10 +34,12 @@ _cfg.logger = logging.getLogger("test")
 sys.modules["src.config"] = _cfg
 _rag = types.ModuleType("src.rag_service")
 for _n in ("generate_embedding", "search_documents", "search_user_documents",
-           "detect_category_filter", "classify_question", "get_routing_strategy",
-           "get_graph_context"):
+           "detect_category_filter", "classify_question", "get_routing_strategy"):
     setattr(_rag, _n, lambda *a, **k: None)
 sys.modules["src.rag_service"] = _rag
+_ng = types.ModuleType("src.normative_graph")
+_ng.get_graph = lambda: None
+sys.modules["src.normative_graph"] = _ng
 _ctx = types.ModuleType("src.context_orchestrator")
 _ctx.search_hybrid = lambda *a, **k: ([], [])
 sys.modules["src.context_orchestrator"] = _ctx

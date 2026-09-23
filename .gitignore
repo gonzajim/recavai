@@ -22,3 +22,7 @@ temp.js
 firestore-debug.log
 *.ps1
 .cache/
+
+# Preguntas reales de usuarios (BigQuery): datos de usuarios, no van al repositorio.
+# Se regeneran con la consulta de docs/PLAN_HOY.md.
+data/real_queries.jsonl

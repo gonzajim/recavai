@@ -15,8 +15,8 @@ from src.rag_service import (
     detect_category_filter,
     classify_question,
     get_routing_strategy,
-    get_graph_context,
 )
+from src.normative_graph import get_graph
 from src.context_orchestrator import search_hybrid
 
 _GEMINI_MODEL = "gemini-2.5-flash"
@@ -25,6 +25,9 @@ _GEMINI_MODEL = "gemini-2.5-flash"
 # modelo, y en Gemini 2.5 el razonamiento interno consume de ese mismo presupuesto:
 # si se agota, la respuesta llega SIN contenido y el usuario ve un error.
 _MAX_OUTPUT_TOKENS = 8192
+
+# Fragmentos extra que puede aportar el grafo normativo por consulta (src/normative_graph.py).
+_GRAPH_EXPAND = 3
 
 # Context window budget per model (chars, with 0.90 safety factor applied)
 _CONTEXT_BUDGET: dict[str, int] = {
@@ -400,21 +403,7 @@ def _verify_compliance(
     if not questions or not answer_text.strip():
         return None
 
-    preguntas = "\n".join(f"- {q.text}" for q in questions)
-    query = (
-        "VERIFICACIÓN DE CUMPLIMIENTO NORMATIVO (consulta interna de un auditor, "
-        "no la responde un usuario final).\n\n"
-        f"Preguntas de auditoría formuladas:\n{preguntas}\n\n"
-        f"Respuesta de la empresa auditada:\n\"{answer_text.strip()}\"\n\n"
-        "Contrasta esa respuesta con la normativa aplicable (CSRD, CSDDD, ESRS/NEIS, GRI, "
-        "guías OCDE) según la base documental. Responde EXACTAMENTE con este formato:\n"
-        "VEREDICTO: cumple | cumple parcialmente | no cumple | no evaluable\n"
-        "BRECHA: (qué falta o qué incumple, 1-2 frases; 'ninguna' si cumple)\n"
-        "RECOMENDACIÓN: (qué debe hacer la empresa, concreto y accionable, 1-3 frases; "
-        "'ninguna' si cumple)\n"
-        "BASE: (norma y artículo o disclosure concreto en el que te apoyas)\n"
-        "Si la base documental no permite pronunciarse, usa VEREDICTO: no evaluable."
-    )
+    query = build_verification_query([q.text for q in questions], answer_text)
 
     try:
         text, _sources = chat_with_expert(
@@ -434,6 +423,27 @@ def _verify_compliance(
         "assessment": (text or "").strip()[:2000],
         "at": datetime.now(timezone.utc).isoformat(),
     }
+
+
+def build_verification_query(question_texts: list[str], answer_text: str) -> str:
+    """Consulta que el auditor envía al asesor para contrastar una respuesta con la
+    normativa. Separada de `_verify_compliance` para que la batería de evaluación
+    (scripts/eval_battery.py) pruebe exactamente el mismo texto que producción."""
+    preguntas = "\n".join(f"- {t}" for t in question_texts)
+    return (
+        "VERIFICACIÓN DE CUMPLIMIENTO NORMATIVO (consulta interna de un auditor, "
+        "no la responde un usuario final).\n\n"
+        f"Preguntas de auditoría formuladas:\n{preguntas}\n\n"
+        f"Respuesta de la empresa auditada:\n\"{answer_text.strip()}\"\n\n"
+        "Contrasta esa respuesta con la normativa aplicable (CSRD, CSDDD, ESRS/NEIS, GRI, "
+        "guías OCDE) según la base documental. Responde EXACTAMENTE con este formato:\n"
+        "VEREDICTO: cumple | cumple parcialmente | no cumple | no evaluable\n"
+        "BRECHA: (qué falta o qué incumple, 1-2 frases; 'ninguna' si cumple)\n"
+        "RECOMENDACIÓN: (qué debe hacer la empresa, concreto y accionable, 1-3 frases; "
+        "'ninguna' si cumple)\n"
+        "BASE: (norma y artículo o disclosure concreto en el que te apoyas)\n"
+        "Si la base documental no permite pronunciarse, usa VEREDICTO: no evaluable."
+    )
 
 
 def _record_block_answers(
@@ -675,6 +685,26 @@ def _build_rag_message(
                 logger.info("RAG: category filter returned 0 results, retrying without filter")
                 pine_docs = search_documents(pinecone_index, embedding, metadata_filter=None)
 
+            # Grafo normativo: añade fragmentos de las unidades a las que remiten los
+            # recuperados («de conformidad con el artículo 8»). Solo si RAG_NORMATIVE_GRAPH
+            # está activado; sustituye a la consulta a Neo4j, cuya instancia no existe.
+            graph = get_graph()
+            if graph is not None:
+                # Unidades nombradas en la pregunta («artículo 9 de la CSDDD», «E1-6»): van
+                # delante, porque es lo que el usuario ha pedido literalmente.
+                direct = graph.explicit(pinecone_index, user_message, embedding, limit=_GRAPH_EXPAND)
+                if direct:
+                    seen = {(d["title"], (d.get("content") or "")[:80]) for d in direct}
+                    pine_docs = direct + [d for d in pine_docs
+                                          if (d.get("title"), (d.get("content") or "")[:80]) not in seen]
+                    logger.info("Grafo normativo: %d fragmentos por referencia explícita", len(direct))
+            if graph is not None and pine_docs:
+                extra = graph.expand(pinecone_index, pine_docs, embedding, limit=_GRAPH_EXPAND)
+                if extra:
+                    logger.info("Grafo normativo: +%d fragmentos (%s)", len(extra),
+                                ", ".join(f"{d['title'].split('/')[-1]} {d.get('article')}" for d in extra))
+                    pine_docs = pine_docs + extra
+
         docs = user_docs + local_docs + pine_docs
 
         if not docs and pinecone_index is None:
@@ -696,9 +726,16 @@ def _build_rag_message(
         total_pages = doc.get("total_pages")
         content = doc.get("content", "").strip()
 
+        unit_label = doc.get("unit_label")
+        page_end = doc.get("page_end")
         meta_parts = [category] if category else []
+        if unit_label:
+            # El modelo solo puede citar «artículo 8» si se lo decimos: el texto del
+            # fragmento no siempre lleva el número del artículo en el que está.
+            meta_parts.insert(0, unit_label)
         if page is not None:
-            meta_parts.append(f"p.{page}/{total_pages}" if total_pages else f"p.{page}")
+            pages = f"{page}-{page_end}" if page_end and page_end != page else f"{page}"
+            meta_parts.append(f"p.{pages}/{total_pages}" if total_pages else f"p.{pages}")
         meta_parts.append(f"relevancia={score:.2f}")
         header = f"[{i}] {title} ({', '.join(meta_parts)})"
 
@@ -715,47 +752,21 @@ def _build_rag_message(
             "excerpt": content[:220] + ("…" if len(content) > 220 else ""),
             "page": page,
             "total_pages": total_pages,
+            "page_end": page_end,
+            "unit": unit_label,
         })
 
-    # Graph context for operational/resource questions (Neo4j)
-    graph_section = ""
-    if strategy == "hybrid":
-        graph_budget = max(0, char_budget - used_chars - 500)
-        if graph_budget > 0:
-            graph_ctx = get_graph_context(user_message, char_budget=graph_budget)
-            if graph_ctx:
-                graph_section = f"\n\n{graph_ctx}"
-                used_chars += len(graph_ctx)
-
-    if not context_parts and not graph_section:
+    if not context_parts:
         return user_message, []
 
     semantic_block = "\n\n".join(context_parts)
-
-    if semantic_block and graph_section:
-        augmented = (
-            f"## CONTEXTO SEMÁNTICO\n"
-            f"Fragmentos relevantes de la base documental "
-            f"(cítalos inline como [1], [2]… cuando los uses en tu respuesta):\n\n"
-            f"{semantic_block}"
-            f"\n\n## RELACIONES DE GRAFO{graph_section}"
-            f"\n\n---\n\nPregunta: {user_message}"
-        )
-    elif semantic_block:
-        augmented = (
-            f"Fragmentos relevantes de la base documental "
-            f"(cítalos inline como [1], [2]… cuando los uses en tu respuesta):\n\n"
-            f"{semantic_block}\n\n---\n\nPregunta: {user_message}"
-        )
-    else:
-        augmented = (
-            f"{graph_section.strip()}\n\n---\n\nPregunta: {user_message}"
-        )
-
-    logger.info(
-        "RAG message built: %d semantic chunks, graph=%s, total_chars=%d",
-        len(context_parts), bool(graph_section), used_chars,
+    augmented = (
+        f"Fragmentos relevantes de la base documental "
+        f"(cítalos inline como [1], [2]… cuando los uses en tu respuesta):\n\n"
+        f"{semantic_block}\n\n---\n\nPregunta: {user_message}"
     )
+
+    logger.info("RAG message built: %d chunks, total_chars=%d", len(context_parts), used_chars)
     return augmented, sources
 
 

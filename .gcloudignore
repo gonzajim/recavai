@@ -29,3 +29,7 @@ bubble_tmp.bin
 temp.js
 test_api.ps1
 test.orchestrator.http
+
+# Datos de evaluación que no forman parte de la imagen
+data/real_queries.jsonl
+data/categorias_v1.json

@@ -28,7 +28,6 @@ firebase-admin
 google-cloud-bigquery
 
 # --- Grafo de conocimiento (GraphRAG) ---
-neo4j>=5.20.0
 
 # --- Pipeline de indexación del corpus (src/corpus_pipeline.py, offline) ---
 pdfplumber      # extracción de PDF con soporte de tablas y layout

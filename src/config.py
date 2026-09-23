@@ -49,26 +49,32 @@ try:
     bq_client = bigquery.Client()
     logger.info("BigQuery client initialized.")
 
-    if PINECONE_API_KEY and PINECONE_INDEX_NAME:
+    # RAG_INDEX_NAME (variable normal, por revisión) tiene prioridad sobre el secreto
+    # PINECONE_INDEX_NAME. Así cada revisión de Cloud Run lleva fijado su índice: si el
+    # índice se cambiara en el secreto (que se lee como «latest»), al volver a una revisión
+    # anterior esta leería el índice NUEVO con el modelo de embeddings VIEJO.
+    _INDEX_NAME = os.getenv("RAG_INDEX_NAME") or PINECONE_INDEX_NAME
+    if PINECONE_API_KEY and _INDEX_NAME:
         _pc = PineconeClient(api_key=PINECONE_API_KEY)
-        # PINECONE_INDEX_NAME may be a host URL (https://...) or a plain index name.
-        if PINECONE_INDEX_NAME.startswith("http"):
-            pinecone_index = _pc.Index(host=PINECONE_INDEX_NAME)
+        # El nombre puede ser una URL de host (https://...) o el nombre del índice.
+        if _INDEX_NAME.startswith("http"):
+            pinecone_index = _pc.Index(host=_INDEX_NAME)
         else:
-            pinecone_index = _pc.Index(PINECONE_INDEX_NAME)
-        logger.info("Pinecone index connected via '%s'.", PINECONE_INDEX_NAME)
+            pinecone_index = _pc.Index(_INDEX_NAME)
+        logger.info("Pinecone index connected via '%s'.", _INDEX_NAME)
     else:
         pinecone_index = None
         logger.warning("Pinecone not configured (PINECONE_API_KEY or PINECONE_INDEX_NAME missing). RAG disabled.")
 
-    # Embedding model — must match the model used to build the Pinecone corpus.
-    # Current corpus: sentence-transformers/all-MiniLM-L6-v2 (384 dims, English).
-    # To improve Spanish quality without re-indexing: keep this model.
-    # Future: migrate to paraphrase-multilingual-MiniLM-L12-v2 + re-index corpus.
+    # Modelo de embeddings: TIENE que ser el mismo con el que se construyó el índice
+    # (ARC-3). Índice v1 (uclm-corpus-roma): all-MiniLM-L6-v2. Índice v2
+    # (recavai-corpus-v2): intfloat/multilingual-e5-small, que exige prefijos
+    # 'query: '/'passage: ' (rag_service._e5_prefix). Ambos son de 384 dimensiones.
     _EMBEDDING_MODEL_NAME = os.getenv(
         "EMBEDDING_MODEL_NAME", "sentence-transformers/all-MiniLM-L6-v2"
     )
     embed_model = SentenceTransformer(_EMBEDDING_MODEL_NAME)
+    embed_model.recava_model_name = _EMBEDDING_MODEL_NAME
     logger.info("SentenceTransformer '%s' loaded.", _EMBEDDING_MODEL_NAME)
 
     # In-memory FAISS store — one per session, keyed by thread_id.

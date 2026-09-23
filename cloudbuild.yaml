@@ -30,6 +30,8 @@ steps:
       - 'build'
       - '--build-arg'
       - 'BUILDKIT_INLINE_CACHE=1'
+      - '--build-arg'
+      - 'EMBEDDING_MODEL=${_EMBEDDING_MODEL}'
       - '--cache-from'
       - 'europe-west1-docker.pkg.dev/${PROJECT_ID}/cloud-run-source-deploy/${_SERVICE_NAME}:latest'
       - '-t'
@@ -61,9 +63,10 @@ steps:
           --image europe-west1-docker.pkg.dev/${PROJECT_ID}/cloud-run-source-deploy/${_SERVICE_NAME}:${SHORT_SHA} \
           --region europe-west1 --platform managed --project ${PROJECT_ID} \
           --allow-unauthenticated --port 8080 \
-          --update-secrets=GEMINI_API_KEY=GEMINI_API_KEY:latest,PINECONE_API_KEY=PINECONE_API_KEY:latest,PINECONE_INDEX_NAME=PINECONE_INDEX_NAME:latest,BIGQUERY_DATASET_ID=BIGQUERY_DATASET_ID:latest,BIGQUERY_TABLE_ID=BIGQUERY_TABLE_ID:latest,NEO4J_PASSWORD=NEO4J_PASSWORD:latest \
-          --set-env-vars=EMBEDDING_MODEL_NAME=${_EMBEDDING_MODEL},NEO4J_URI=${_NEO4J_URI},NEO4J_USERNAME=${_NEO4J_USER},NEO4J_DATABASE=${_NEO4J_DB} \
-          --timeout=600s --concurrency=40 --cpu=2 --memory=4Gi \
+          --update-secrets=GEMINI_API_KEY=GEMINI_API_KEY:latest,PINECONE_API_KEY=PINECONE_API_KEY:latest,PINECONE_INDEX_NAME=PINECONE_INDEX_NAME:latest,BIGQUERY_DATASET_ID=BIGQUERY_DATASET_ID:latest,BIGQUERY_TABLE_ID=BIGQUERY_TABLE_ID:latest \
+          --remove-secrets=NEO4J_PASSWORD \
+          --set-env-vars=EMBEDDING_MODEL_NAME=${_EMBEDDING_MODEL},RAG_INDEX_NAME=${_RAG_INDEX},RAG_MIN_SCORE=${_RAG_MIN_SCORE},RAG_NORMATIVE_GRAPH=${_RAG_GRAPH} \
+          --timeout=600s --concurrency=16 --cpu=2 --memory=4Gi \
           $$TRAFFIC_ARGS
         if [ "${_TRAFFIC}" != "latest" ]; then
           # La URL etiquetada es la del servicio con el prefijo "TAG---". Se construye
@@ -132,10 +135,14 @@ substitutions:
   _FIREBASE_PROJECT_ALIAS: 'dev'
   _TRAFFIC: 'canary'
   _CANARY_TAG: 'canary'
-  _EMBEDDING_MODEL: 'sentence-transformers/all-MiniLM-L6-v2'
-  _NEO4J_URI: 'neo4j+s://273d9982.databases.neo4j.io'
-  _NEO4J_USER: '273d9982'
-  _NEO4J_DB: '273d9982'
+  # Índice, modelo y umbral van JUNTOS: cambiar uno sin los otros rompe la búsqueda (ARC-3).
+  # v1: uclm-corpus-roma + sentence-transformers/all-MiniLM-L6-v2 + 0.55
+  # v2: recavai-corpus-v2 + intfloat/multilingual-e5-small + 0.841 (scripts/calibrate_threshold.py)
+  _EMBEDDING_MODEL: 'intfloat/multilingual-e5-small'
+  _RAG_INDEX: 'recavai-corpus-v2'
+  _RAG_MIN_SCORE: '0.841'
+  # Ruta del grafo normativo dentro de la imagen; vacío = desactivado.
+  _RAG_GRAPH: '/app/data/normative_graph.json'
 
 images:
   - 'europe-west1-docker.pkg.dev/${PROJECT_ID}/cloud-run-source-deploy/${_SERVICE_NAME}:latest'
