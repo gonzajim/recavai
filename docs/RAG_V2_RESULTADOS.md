@@ -10,11 +10,11 @@ normativa y grafo normativo en memoria. Batería de 60 preguntas en 13 tipos
 | | |
 |---|---|
 | Producción | revisión `orchestrator-dev-00056-loh` (v1), 100 % del tráfico. **Sin cambios.** |
-| Versión de prueba | revisión `orchestrator-dev-00058-jot`, etiqueta `canary`, 0 % del tráfico. Arranca bien; **no incluye** la corrección del verificador del auditor (hecha después). |
+| Versión de prueba | revisión `orchestrator-dev-00059-guh` (commit `8523966`, con la corrección del auditor), etiqueta `canary`, 0 % del tráfico. Responde. **Lista para promover.** |
 | Índice v2 | `recavai-corpus-v2`, 8.127 vectores, us-east-1 (el plan gratuito de Pinecone no admite regiones europeas), protección de borrado activada. |
 | Índice v1 | `uclm-corpus-roma`, intacto, protección de borrado activada hoy. |
-| **Gemini** | **Crédito prepago agotado (error 402).** Afecta también a la clave de producción: el asistente no puede responder hasta que se recargue en AI Studio. Lo agotó, con toda probabilidad, esta evaluación (~1.100 llamadas). |
-| Decisión | **Pendiente.** No se ha movido tráfico. Ver «Qué falta». |
+| Gemini | El crédito prepago se agotó durante la evaluación (error 402, también en producción) y se recargó el mismo día; la clave de producción vuelve a responder. |
+| Decisión | **Promover C+G.** Se cumplen las condiciones 1-4; la 5 (latencia) es indeterminada con 60 preguntas y se acepta (ver abajo). Falta ejecutar `./scripts/deploy.sh promote dev`. |
 
 ## Configuraciones
 
@@ -44,8 +44,17 @@ Mismo juez para todas (`gemini-3.5-flash`). La búsqueda es determinista; la gen
 | Trampas detectadas | 1/3 | 2/3 | 2/3 | **2/3** | |
 | Veredicto correcto (auditor) | 4/4 | 4/4 | 4/4 | 4/4 | |
 
-**Comparación a ciegas de respuestas** (juez `gemini-3.7-flash`, orden aleatorio):
-C+G gana **42**, A gana **17**, 1 empate.
+**Comparación a ciegas de respuestas** (juez `gemini-3.7-flash`, orden aleatorio), con la
+corrección del auditor: C+G gana **43**, A gana **15**, 2 empates. En el modo auditor,
+4–0 (sin la corrección, 1–3). En las 4 preguntas reales de la batería gana A 3 a 1, por
+redacción salvo B52, donde C+G cita un número de directiva erróneo (2024/1109).
+
+**Contexto recuperado en las 226 preguntas reales** (juez `gemini-3.8-flash`, a ciegas):
+C+G gana **132**, A gana **28**, empate 66. Sustituye a la semana en sombra del plan
+original.
+
+**Auditor con la corrección** (4 comprobaciones): veredicto 4/4, cita el artículo 4/4,
+sin afirmaciones no respaldadas 4/4 (antes 1/4).
 
 **Ruido** (A medido dos veces): búsqueda idéntica; datos clave ±6 puntos; fidelidad
 hasta ±13; trampas 1→2 de 3 sin cambiar nada.
@@ -89,15 +98,16 @@ La fidelidad sigue baja en todas las configuraciones: es un problema de generaci
 - **Cuotas.** `gemini-3.1-pro-preview`: 250 peticiones/día por modelo. El juez se
   cambió a `gemini-3.5-flash` y todas las configuraciones se volvieron a juzgar con él.
 
-## Qué falta, en orden
+## Qué falta
 
-1. **Recargar el crédito de Gemini** en AI Studio. Hasta entonces producción no responde.
-2. Redesplegar la versión de prueba con la corrección del verificador del auditor
-   (`./scripts/deploy.sh canary dev`).
-3. Medir las 4 preguntas del auditor con esa corrección y la comparación de contextos
-   sobre las 226 preguntas reales (unas 230 llamadas con un juez *flash*).
-4. Decidir la condición 5 (latencia) — ver recomendación en la conversación — y, si
-   procede, `./scripts/deploy.sh promote dev`. Volver atrás: `./scripts/deploy.sh rollback dev`.
+1. `./scripts/deploy.sh promote dev` — pasa el 100 % del tráfico a la revisión 00059.
+2. Comprobar en el widget una pregunta del asesor y una respuesta del auditor.
+3. Volver atrás, si algo va mal: `./scripts/deploy.sh rollback dev` (la revisión 00056 y
+   el índice v1 siguen intactos).
+4. Pendientes que no bloquean: fidelidad de la generación (el modelo completa con lo que
+   sabe: ~28 % de respuestas sin afirmaciones no respaldadas); B60 (Ley 11/2018) sigue
+   inventando; la sonda de arranque de Cloud Run da la instancia por lista antes de que
+   la aplicación cargue.
 
 ## Reproducir
 
