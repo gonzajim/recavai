@@ -482,9 +482,11 @@ max_rounds            = 6      # tool-call loop cap
 | `DEBT-9` | low | FAISS store still initialised and searched although uploads are permanent in Pinecone | `src/local_vector_store.py` | — |
 | `DEBT-10` | low | `@limiter.limit` is declared above `@app.route`; limits are registered by function name so they likely apply, but this is unverified by test | `app.py` | `API-0.6` |
 | `DEBT-11` | low | Working files in repo root: `firestore-debug.log`, `bubble_tmp.bin`, `temp.js`, `test_api.ps1` | repo root | — |
+| `DEBT-13` | high | `all-MiniLM-L6-v2` caps at 256 word-pieces; 4,186 of 9,176 indexed chunks (45.6 %) exceed it, so 41.2 % of indexed word-pieces (1,057,855 of 2,567,811) never reach the vector. Those chunks hold 83.4 % of corpus words. Verified 2026-09-23: cosine between a 735-token chunk's stored vector and the embedding of only its first 254 tokens = 1.0000. Text still reaches the generator once retrieved — the defect is in **retrieval**, not context. User uploads are worse: `_CHUNK_WORDS=400` ≈ 800 word-pieces in Spanish | `src/config.py`, `src/rag_service.py` | `DEBT-4`, `RAG-*` |
+| `DEBT-14` | high | The Neo4j graph does not exist. `neo4j+s://273d9982.databases.neo4j.io` returns NXDOMAIN on 8.8.8.8 and 1.1.1.1 while the parent domain resolves — deleted Aura instance. `get_graph_context` returns `""` on any failure, so the `hybrid` route degrades silently and indistinguishably from "no entities matched". No "Graph RAG" line in 30 days of production logs. `entities`/`triplets` are `'[]'` in all 9,176 vectors. **The running system is pure semantic RAG**; docs calling it GraphRAG describe the code, not production | `src/rag_service.py`, Cloud Run env | `ARC-*`, `DEBT-3` |
 | `DEBT-12` | medium | 1,065 indexed chunks (12 %) carry words split by EUR-Lex line-break hyphenation (U+00AD), e.g. `empre­ sarial`, `obliga­ ciones`. Concentrated in the three legally load-bearing texts: `03_NEIS` 840, `02_CSDR` 116, `01_CSDDD` 109. Degrades both the embedding and the literal quotation shown to the user. Repair is prepared and reversible-by-recompute but **not applied**: `scripts/fix_soft_hyphens.py --apply` | Pinecone `uclm-corpus-roma` | `DEBT-3` |
 
-**Remediation order:** `DEBT-1`, `DEBT-2` (security, minutes) → `DEBT-3` with benchmark gate → the rest.
+**Remediation order:** `DEBT-1`, `DEBT-2` (security, minutes) → `DEBT-13`, `DEBT-14` (retrieval is measurably broken) → `DEBT-12` → `DEBT-3` with benchmark gate → the rest.
 
 ---
 
