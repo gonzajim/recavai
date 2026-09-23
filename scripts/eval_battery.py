@@ -384,12 +384,15 @@ def run_item(item, gs, embed, index, genai_client, captured, judge_model, genera
         rec["veredicto"] = m.group(1).lower() if m else None
         rec["veredicto_ok"] = float(rec["veredicto"] == item["veredicto_esperado"])
 
-    score_judgement(rec, item, judge(genai_client, judge_model, item, answer, docs))
+    if judge_model:
+        score_judgement(rec, item, judge(genai_client, judge_model, item, answer, docs))
     return rec
 
 
 def cmd_run(a) -> None:
     items = load_queries(Path(a.queries)) if a.queries else load_battery()
+    if a.sample:
+        items = random.Random(a.seed).sample(items, a.sample)
     if a.only:
         items = [it for it in items if it["id"] in set(a.only.split(","))]
     if a.limit:
@@ -402,7 +405,8 @@ def cmd_run(a) -> None:
           f" · generación {'sí' if not a.no_generate else 'no'}", file=sys.stderr)
 
     def work(it):
-        return run_item(it, gs, embed, index, genai_client, captured, a.judge_model, not a.no_generate)
+        return run_item(it, gs, embed, index, genai_client, captured, None if a.no_judge else a.judge_model,
+                        not a.no_generate)
 
     results = []
     with ThreadPoolExecutor(max_workers=a.workers) as ex:
@@ -516,7 +520,7 @@ para la misma pregunta. No sabes qué sistema produjo cada una. El orden es alea
 
 PREGUNTA:
 {pregunta}
-{hechos}
+{hechos}{fragmentos}
 === {etiqueta} X ===
 {x}
 
@@ -529,6 +533,14 @@ Devuelve SOLO un JSON: {{"mejor": "X" | "Y" | "empate", "motivo": "una frase"}}"
 CRIT_ANSWER = ("gana la respuesta más correcta y útil para quien pregunta: que transmita los hechos clave, "
                "que no afirme cosas falsas o no respaldadas, que cite la norma y el artículo correctos. "
                "Una respuesta larga no es mejor por serlo. Empate solo si son equivalentes de verdad.")
+CRIT_GROUNDED = (
+    "Los FRAGMENTOS son el texto de la base documental que tuvo delante el asistente: el texto "
+    "consolidado vigente de cada norma, que PREVALECE sobre lo que tú recuerdes (las normas se "
+    "modificaron en 2025 y 2026; no descartes una referencia porque no la conozcas). Gana la "
+    "respuesta más correcta y útil: que transmita lo que dicen los fragmentos sobre la pregunta, "
+    "completa y bien organizada, y que no afirme datos normativos (cifras, plazos, artículos, "
+    "obligaciones) que los fragmentos no respaldan. Un dato no respaldado cuenta en contra aunque "
+    "te parezca correcto. Una respuesta larga no es mejor por serlo. Empate solo si son equivalentes.")
 CRIT_CONTEXT = ("gana el conjunto de fragmentos que permite responder MEJOR a la pregunta con la normativa: "
                 "más pertinente, más completo, de la norma y el artículo adecuados. Empate si son equivalentes "
                 "o si ninguno sirve.")
@@ -541,6 +553,22 @@ def _fmt_context(rec: dict) -> str:
     return "\n\n".join(f"[{i}] {f.get('title','').split('/')[-1]} "
                         f"({(f.get('unit_label') + ' · ') if f.get('unit_label') else ''}p.{f.get('page')})\n"
                         f"{(f.get('content') or '')[:1200]}" for i, f in enumerate(frs, 1))
+
+
+def _fragments_for_judge(b: dict, n: dict) -> str:
+    """Los fragmentos que tuvieron delante las dos respuestas. Si son los mismos y en el mismo
+    orden (lo normal: la recuperación es determinista), una sola lista con su numeración
+    original, para que las citas [n] de ambas respuestas se puedan comprobar."""
+    def fmt(frs):
+        return "\n\n".join(f"[{i}] {f.get('title','').split('/')[-1]} "
+                            f"({(f.get('unit_label') + ' · ') if f.get('unit_label') else ''}p.{f.get('page')})\n"
+                            f"{(f.get('content') or '')[:1500]}" for i, f in enumerate(frs, 1)) or "(ninguno)"
+    kb = [(f.get("title"), (f.get("content") or "")[:80]) for f in b.get("recuperados") or []]
+    kn = [(f.get("title"), (f.get("content") or "")[:80]) for f in n.get("recuperados") or []]
+    if kb == kn:
+        return "\nFRAGMENTOS (los mismos para las dos respuestas):\n" + fmt(b.get("recuperados") or []) + "\n"
+    return ("\nFRAGMENTOS que recibió la respuesta X y la Y (listas distintas; cada respuesta cita la suya):\n"
+            "--- lista A ---\n" + fmt(b.get("recuperados") or []) + "\n--- lista B ---\n" + fmt(n.get("recuperados") or []) + "\n")
 
 
 def cmd_pairwise(a) -> None:
@@ -559,12 +587,14 @@ def cmd_pairwise(a) -> None:
         if a.context:
             xb, xn, etiqueta, que, crit = _fmt_context(b), _fmt_context(n), "FRAGMENTOS", "conjuntos de fragmentos recuperados", CRIT_CONTEXT
         else:
-            xb, xn, etiqueta, que, crit = b.get("respuesta") or "(vacía)", n.get("respuesta") or "(vacía)", "RESPUESTA", "respuestas", CRIT_ANSWER
+            crit = CRIT_GROUNDED if a.with_context else CRIT_ANSWER
+            xb, xn, etiqueta, que = b.get("respuesta") or "(vacía)", n.get("respuesta") or "(vacía)", "RESPUESTA", "respuestas"
         x, y = (xn, xb) if flip else (xb, xn)
         it = items.get(i)
         hechos = ("\nHECHOS CLAVE (referencia):\n" + "\n".join(f"- {h}" for h in it["hechos_clave"]) + "\n") if it else ""
+        frags = _fragments_for_judge(b, n) if (a.with_context and not a.context) else ""
         prompt = PAIR_PROMPT.format(que=que, pregunta=it["pregunta"] if it else b.get("pregunta", ""),
-                                    hechos=hechos, etiqueta=etiqueta, x=x, y=y, criterio=crit)
+                                    hechos=hechos, fragmentos=frags, etiqueta=etiqueta, x=x, y=y, criterio=crit)
         for _ in range(3):
             try:
                 r = client.models.generate_content(model=a.judge_model, contents=prompt,
@@ -584,7 +614,8 @@ def cmd_pairwise(a) -> None:
     by = defaultdict(Counter)
     for i, w, _ in res:
         by[(items.get(i) or {}).get("tipo", "real")][w] += 1
-    L = [f"# {'Contexto' if a.context else 'Respuesta'}: {a.new} contra {a.base} (juez a ciegas, orden aleatorio)", "",
+    L = [f"# {'Contexto' if a.context else 'Respuesta'}: {a.new} contra {a.base} (juez a ciegas, orden aleatorio"
+         f"{', viendo los fragmentos' if a.with_context and not a.context else ''})", "",
          f"{len(res)} comparaciones · gana {a.new}: **{c[a.new]}** · gana {a.base}: **{c[a.base]}** · "
          f"empate: {c['empate']} · error: {c['error']}", "",
          "| Tipo | gana " + a.new + " | gana " + a.base + " | empate |", "|---|---:|---:|---:|"]
@@ -592,9 +623,10 @@ def cmd_pairwise(a) -> None:
         L.append(f"| {t} | {cc[a.new]} | {cc[a.base]} | {cc['empate']} |")
     L += ["", f"## Donde gana {a.base}", ""] + [f"- **{i}**: {m}" for i, w, m in res if w == a.base]
     text = "\n".join(L)
-    out = OUT / f"pairwise_{'ctx_' if a.context else ''}{a.base}_vs_{a.new}.md"
+    tag = "ctx_" if a.context else ("frag_" if a.with_context else "")
+    out = OUT / f"pairwise_{tag}{a.base}_vs_{a.new}.md"
     out.write_text(text, encoding="utf-8")
-    (OUT / f"pairwise_{'ctx_' if a.context else ''}{a.base}_vs_{a.new}.jsonl").write_text(
+    (OUT / f"pairwise_{tag}{a.base}_vs_{a.new}.jsonl").write_text(
         "\n".join(json.dumps({"id": i, "gana": w, "motivo": m}, ensure_ascii=False) for i, w, m in res), encoding="utf-8")
     print(text[:3000])
     print(f"\n→ {out}")
@@ -688,8 +720,11 @@ def main() -> None:
     r.add_argument("--judge-model", default="gemini-3.1-pro-preview")
     r.add_argument("--workers", type=int, default=4)
     r.add_argument("--no-generate", action="store_true", help="solo recuperación")
+    r.add_argument("--no-judge", action="store_true", help="generar sin juzgar (preguntas sin referencia)")
     r.add_argument("--graph", help="ruta al grafo normativo (activa la expansión por grafo)")
     r.add_argument("--queries", help="fichero de preguntas sin referencia (en vez de la batería)")
+    r.add_argument("--sample", type=int, help="muestra aleatoria de N preguntas")
+    r.add_argument("--seed", type=int, default=2026)
     r.add_argument("--only", help="ids separados por comas")
     r.add_argument("--limit", type=int)
     c = sub.add_parser("compare")
@@ -699,6 +734,8 @@ def main() -> None:
     pw.add_argument("base")
     pw.add_argument("new")
     pw.add_argument("--context", action="store_true", help="comparar fragmentos recuperados, no respuestas")
+    pw.add_argument("--with-context", action="store_true",
+                    help="el juez ve los fragmentos que tuvieron delante las respuestas y juzga con ellos")
     pw.add_argument("--judge-model", default="gemini-3.1-pro-preview")
     pw.add_argument("--workers", type=int, default=6)
     rj = sub.add_parser("rejudge")

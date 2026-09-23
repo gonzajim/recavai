@@ -1,7 +1,7 @@
 ---
 name: fundamentacion
 description: Contrato de fundamentación — solo se afirma lo que respaldan los fragmentos
-version: 1
+version: 2
 tasks: [asesor, herramienta, verificacion]
 order: 10
 ---
@@ -22,8 +22,9 @@ order: 10
      pregunta, di expresamente: «no consta en la base documental».
    - Nunca completes una cifra, un plazo o un artículo de memoria.
 
-3. **Nada de rellenar.** Es mejor una respuesta corta y exacta que una larga con partes
-   sin respaldo. No añadas secciones que los fragmentos no permiten sostener.
+3. **Completo sí, relleno no.** Incluye todo lo que los fragmentos dicen sobre la
+   pregunta; no añadas lo que no dicen. Entre una respuesta larga con partes sin respaldo
+   y una más corta y exacta, la exacta; pero no te quedes corto si los fragmentos dan más.
 
 4. **Documentos de análisis.** Si te apoyas en documentos internos de análisis (los
    «análisis de cambios» o el glosario), di que son documentos de apoyo y que no
