@@ -6,7 +6,7 @@ from google.genai import types
 from google.cloud.firestore_v1 import SERVER_TIMESTAMP
 
 from src.config import logger
-from src.assistant_instructions import AUDITOR_SYSTEM_PROMPT, EXPERT_SYSTEM_PROMPT
+from src.assistant_instructions import AUDITOR_SYSTEM_PROMPT
 from src import audit_catalog
 from src.rag_service import (
     generate_embedding,
@@ -263,34 +263,26 @@ def chat_with_expert(
     local_store=None,
     uid: str | None = None,
     retrieval_query: str | None = None,
-) -> tuple[str, list[dict]]:
+    task: str = "asesor",
+    return_result: bool = False,
+):
     """
-    Runs one advisor turn with RAG augmentation.
-    Searches user's Pinecone namespace first (if uid provided), then global corpus.
-    Returns (response_text, sources).
+    Un turno del asesor. Delega en el harness (src/agent/harness.py): recuperación,
+    controles de entrada/contexto, habilidades compuestas por tarea, generación,
+    controles de salida y una reparación.
 
+    task: «asesor» (chat), «herramienta» (el auditor consulta al asesor) o
+          «verificacion» (contraste de una respuesta con la normativa).
     retrieval_query: texto con el que BUSCAR, si no es el mensaje entero. Lo usa el
-    verificador del auditor: su mensaje lleva instrucciones de formato que, embebidas,
-    dominaban el vector y hacían recuperar el glosario en lugar del artículo aplicable.
+          verificador del auditor: su mensaje lleva instrucciones de formato que, embebidas,
+          dominaban el vector y hacían recuperar el glosario en lugar del artículo aplicable.
+    Devuelve (texto, fuentes), o el TurnResult completo si return_result=True.
     """
-    augmented_message, sources = _build_rag_message(
-        embed_model, pinecone_index, user_message,
-        thread_id=thread_id, local_store=local_store, uid=uid,
-        retrieval_query=retrieval_query,
-    )
-
-    contents: list = list(history) + [
-        types.Content(role="user", parts=[types.Part(text=augmented_message)])
-    ]
-
-    config = types.GenerateContentConfig(
-        system_instruction=EXPERT_SYSTEM_PROMPT,
-        max_output_tokens=_MAX_OUTPUT_TOKENS,
-    )
-
-    response = _generate(genai_client, contents=contents, config=config,
-                         label="asesor", thread_id=thread_id)
-    return _extract_text(response), sources
+    from src.agent.harness import run_turn
+    result = run_turn(genai_client, embed_model, pinecone_index, history, user_message,
+                      task=task, thread_id=thread_id, local_store=local_store, uid=uid,
+                      retrieval_query=retrieval_query)
+    return result if return_result else (result.text, result.sources)
 
 
 # ---------------------------------------------------------------------------
@@ -311,7 +303,7 @@ def _dispatch_tool(
         try:
             text, _ = chat_with_expert(
                 genai_client, embed_model, pinecone_index, [], query,
-                thread_id=thread_id, local_store=local_store, uid=uid,
+                thread_id=thread_id, local_store=local_store, uid=uid, task="herramienta",
             )
             return text
         except Exception:
@@ -417,6 +409,7 @@ def _verify_compliance(
             genai_client, embed_model, pinecone_index, [], query,
             thread_id=thread_id, local_store=None, uid=uid,
             retrieval_query=build_verification_retrieval_query(texts, answer_text),
+            task="verificacion",
         )
     except Exception:
         logger.error("Verificación de cumplimiento fallida thread=%s block=%s",
@@ -638,35 +631,28 @@ def _next_block_id(firestore_db, thread_id: str, after: str) -> str | None:
     return None
 
 
-def _build_rag_message(
+def retrieve_documents(
     embed_model,
     pinecone_index,
     user_message: str,
     thread_id: str | None = None,
     local_store=None,
-    model_name: str = _GEMINI_MODEL,
     uid: str | None = None,
     retrieval_query: str | None = None,
-) -> tuple[str, list[dict]]:
+) -> list[dict]:
     """
-    Retrieves relevant chunks and builds the augmented message for the LLM.
-    Busca con `retrieval_query` si se da; el mensaje al modelo lleva siempre `user_message`.
+    Recupera los fragmentos para una consulta. Busca con `retrieval_query` si se da.
 
-    Search order:
-      1. User's Pinecone namespace (uid) — permanent uploaded files
-      2. FAISS (local_store) — ephemeral session uploads (legacy, kept for running instances)
-      3. Global Pinecone corpus (CSRD/CSDDD/NEIS/OCDE)
-    Results from uploaded documents appear first; corpus follows.
-    augmented_message prepends numbered excerpts so the model can cite [1]…[N].
+    Orden:
+      1. Espacio de nombres del usuario en Pinecone (uid): ficheros subidos
+      2. FAISS (local_store): subidas efímeras de sesión (heredado)
+      3. Corpus global, con referencia explícita y expansión por el grafo normativo
+    Devuelve [] si falla: la recuperación nunca tumba la petición (ARC-6).
     """
-    char_budget = _CONTEXT_BUDGET.get(model_name, 180_000)
     search_text = retrieval_query or user_message
     question_type = classify_question(search_text)
     strategy = get_routing_strategy(question_type)
-    logger.info(
-        "RAG routing: question_type=%s strategy=%s model=%s budget=%d",
-        question_type, strategy, model_name, char_budget,
-    )
+    logger.info("RAG routing: question_type=%s strategy=%s", question_type, strategy)
 
     use_hybrid_faiss = (
         local_store is not None
@@ -722,17 +708,29 @@ def _build_rag_message(
                                 ", ".join(f"{d['title'].split('/')[-1]} {d.get('article')}" for d in extra))
                     pine_docs = pine_docs + extra
 
-        docs = user_docs + local_docs + pine_docs
-
-        if not docs and pinecone_index is None:
-            return user_message, []
+        return user_docs + local_docs + pine_docs
 
     except Exception:
         logger.error("RAG retrieval failed", exc_info=True)
-        return user_message, []
+        return []
 
+
+
+def format_context(
+    docs: list[dict],
+    user_message: str,
+    model_name: str = _GEMINI_MODEL,
+    notices: list[str] | None = None,
+) -> tuple[str, list[dict], list[dict]]:
+    """
+    Construye el mensaje aumentado: avisos del sistema (guardrails de entrada y contexto),
+    fragmentos numerados [1]…[N] con su cabecera y la pregunta.
+    Devuelve (mensaje, fuentes para la interfaz, fragmentos que entraron en el contexto).
+    """
+    char_budget = _CONTEXT_BUDGET.get(model_name, 180_000)
     context_parts = []
     sources = []
+    used = []
     used_chars = len(user_message)
 
     for i, doc in enumerate(docs, 1):
@@ -760,6 +758,7 @@ def _build_rag_message(
         if content and used_chars + len(chunk) <= char_budget:
             context_parts.append(chunk)
             used_chars += len(chunk)
+            used.append(dict(doc, index=i))
 
         sources.append({
             "index": i,
@@ -773,17 +772,43 @@ def _build_rag_message(
             "unit": unit_label,
         })
 
+    avisos = ""
+    if notices:
+        avisos = "AVISOS DEL SISTEMA (obligatorios):\n" + "\n".join(f"- {n}" for n in notices) + "\n\n"
+
     if not context_parts:
-        return user_message, []
+        if avisos:
+            return f"{avisos}---\n\nPregunta: {user_message}", [], []
+        return user_message, [], []
 
     semantic_block = "\n\n".join(context_parts)
     augmented = (
+        f"{avisos}"
         f"Fragmentos relevantes de la base documental "
         f"(cítalos inline como [1], [2]… cuando los uses en tu respuesta):\n\n"
         f"{semantic_block}\n\n---\n\nPregunta: {user_message}"
     )
 
     logger.info("RAG message built: %d chunks, total_chars=%d", len(context_parts), used_chars)
+    return augmented, sources, used
+
+
+
+
+def _build_rag_message(
+    embed_model,
+    pinecone_index,
+    user_message: str,
+    thread_id: str | None = None,
+    local_store=None,
+    model_name: str = _GEMINI_MODEL,
+    uid: str | None = None,
+    retrieval_query: str | None = None,
+) -> tuple[str, list[dict]]:
+    """Recupera y formatea en un paso. Se mantiene para quien no necesita el harness."""
+    docs = retrieve_documents(embed_model, pinecone_index, user_message, thread_id=thread_id,
+                              local_store=local_store, uid=uid, retrieval_query=retrieval_query)
+    augmented, sources, _used = format_context(docs, user_message, model_name=model_name)
     return augmented, sources
 
 

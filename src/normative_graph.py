@@ -154,6 +154,20 @@ class NormativeGraph:
                 keys += [k for k, n in self.nodes.items() if n["unit"] == f"gri.{code}"]
         return [k for k in dict.fromkeys(keys) if k in self.nodes]
 
+    def missing_units(self, query: str) -> list[str]:
+        """Artículos que la pregunta atribuye a una norma concreta y que esa norma no tiene
+        («artículo 52 de la CSDDD»). Lo usa el control de entrada ReferenciaDesconocida."""
+        q = query.lower()
+        docs = [d for d, hints in _DOC_HINTS.items() if any(h in q for h in hints)]
+        if len(docs) != 1:
+            return []
+        keys = []
+        for m in _Q_ART.finditer(query):
+            uid = f"art.{m.group(1)}" + (f".{m.group(2).lower()}" if m.group(2) else "")
+            if f"{docs[0]}#{uid}" not in self.nodes:
+                keys.append(f"{docs[0]}#{uid}")
+        return list(dict.fromkeys(keys))
+
     def explicit(self, index, query: str, query_embedding, limit: int = 3) -> list[dict]:
         """Fragmentos de las unidades nombradas en la pregunta, los más parecidos primero."""
         keys = self.explicit_units(query)

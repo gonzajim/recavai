@@ -37,4 +37,6 @@ storage.rules
 
 # Docs
 *.md
+# …salvo las habilidades del agente, que son instrucciones de runtime (src/agent/skills).
+!src/agent/skills/*.md
 docs/

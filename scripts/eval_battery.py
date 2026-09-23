@@ -302,6 +302,24 @@ def score_retrieval(item: dict, docs: list[dict]) -> dict:
             "mrr": (1.0 / first) if first else 0.0, "fuentes": found / len(exp)}
 
 
+def HAS_HARNESS(gs) -> bool:
+    import inspect
+    return "return_result" in inspect.signature(gs.chat_with_expert).parameters
+
+
+def critical_count(answer: str, docs: list[dict], question: str) -> float | None:
+    """Datos críticos de la respuesta (cifras, fechas, artículos, normas, códigos) sin
+    respaldo en los fragmentos ni en la pregunta. Determinista: mismo criterio que el
+    control de salida del harness (src/agent/guardrails.py). Se descuenta la nota de
+    verificación que añade el harness, que repite los datos dudosos a propósito."""
+    if not answer:
+        return None
+    from src.agent import guardrails as gr
+    body = answer.split("\n\n---\n*Verificación automática:")[0]
+    st = gr.TurnState(question=question, search_text=question, used_docs=docs, answer=body)
+    return float(len(gr.unsupported(body, gr.build_evidence(gr.evidence_texts(st)), gr.norm_registry())))
+
+
 def run_item(item, gs, embed, index, genai_client, captured, judge_model, generate=True) -> dict:
     captured.calls, captured.ms, captured.graph_docs, captured.direct_docs = [], 0.0, [], []
     rec = {"id": item["id"], "tipo": item["tipo"], "pregunta": item["pregunta"]}
@@ -318,14 +336,21 @@ def run_item(item, gs, embed, index, genai_client, captured, judge_model, genera
         else:
             query = item["pregunta"]
         kw = {"retrieval_query": retrieval_query} if retrieval_query else {}
-        if generate:
+        turn = None
+        if generate and HAS_HARNESS(gs):
+            # Con harness: la misma ruta y la misma tarea que usa producción, y el resultado
+            # completo (borrador, controles que saltaron, fragmentos exactos del contexto).
+            turn = gs.chat_with_expert(genai_client, embed, index, [], query, return_result=True,
+                                       task="verificacion" if item["modo"] == "auditor" else "asesor", **kw)
+            answer = turn.text
+        elif generate:
             answer, _sources = gs.chat_with_expert(genai_client, embed, index, [], query, **kw)
         else:
             gs._build_rag_message(embed, index, query, **kw)
             answer = ""
     except Exception as e:                            # noqa: BLE001
         rec["error"] = f"{type(e).__name__}: {e}"
-        answer = ""
+        answer, turn = "", None
     rec["ms_total"] = round((time.time() - t0) * 1000)
     rec["ms_busqueda"] = round(captured.ms)
     # Lo que realmente llegó al modelo: referencia explícita delante, búsqueda, grafo detrás.
@@ -334,6 +359,11 @@ def run_item(item, gs, embed, index, genai_client, captured, judge_model, genera
     seen = {(d.get("title"), (d.get("content") or "")[:80]) for d in direct}
     docs = direct + [d for d in docs if (d.get("title"), (d.get("content") or "")[:80]) not in seen]
     docs = docs + getattr(captured, "graph_docs", [])
+    if turn is not None:
+        docs = turn.used_docs                      # exactamente lo que entró en el contexto
+        rec["borrador"] = turn.draft
+        rec["agente"] = turn.report()
+        rec["avisos"] = [n["guard"] for n in turn.notices]
     rec["recuperados"] = [{"title": d.get("title"), "page": d.get("page"), "page_end": d.get("page_end"),
                            "article": d.get("article"), "unit_label": d.get("unit_label"),
                            "category": d.get("category"), "score": round(d.get("score", 0), 4),
@@ -343,6 +373,9 @@ def run_item(item, gs, embed, index, genai_client, captured, judge_model, genera
         return rec
 
     rec["respuesta"] = answer
+    rec["criticos"] = critical_count(answer, docs, item["pregunta"])
+    if "borrador" in rec:
+        rec["criticos_borrador"] = critical_count(rec["borrador"], docs, item["pregunta"])
     exp_units = {norm_unit(f["articulo"]) for f in item["fuentes_esperadas"] if f["articulo"]} - {None}
     if exp_units:
         rec["cita_unidad"] = float(bool(exp_units & units_in(answer)))
@@ -395,7 +428,7 @@ def _sha(p: Path) -> str:
 # ======================================================================================
 # Resumen y comparación
 # ======================================================================================
-METRICS = ["doc@6", "pasaje@6", "pag@6", "mrr", "fuentes", "cobertura", "fiel", "cita_unidad", "rechazo_ok", "veredicto_ok"]
+METRICS = ["criticos", "criticos_borrador", "doc@6", "pasaje@6", "pag@6", "mrr", "fuentes", "cobertura", "fiel", "cita_unidad", "rechazo_ok", "veredicto_ok"]
 
 
 def load_run(name: str) -> dict[str, dict]:
@@ -610,6 +643,40 @@ def cmd_rejudge(a) -> None:
     print_summary(a.out, out)
 
 
+def cmd_add_critical(a) -> None:
+    """Calcula `criticos` en una ejecución ya hecha (sin llamadas a ningún modelo)."""
+    run = load_run(a.name)
+    frags = load_run(a.fragments_from) if a.fragments_from else run
+    items = {it["id"]: it for it in load_battery()}
+    for i, r in run.items():
+        r["criticos"] = critical_count(r.get("respuesta") or "", frags[i]["recuperados"], items[i]["pregunta"])
+    with open(OUT / f"{a.name}.jsonl", "w", encoding="utf-8") as fh:
+        for r in run.values():
+            fh.write(json.dumps(r, ensure_ascii=False) + "\n")
+    print(f"{a.name}: criticos medio {mean([r['criticos'] for r in run.values()]):.2f}")
+
+
+def cmd_split_draft(a) -> None:
+    """Convierte los BORRADORES de una ejecución con harness en una ejecución propia (lo que
+    se habría servido sin la capa de reparación) para juzgarla con `rejudge`."""
+    run = load_run(a.name)
+    items = {it["id"]: it for it in load_battery()}
+    with open(OUT / f"{a.out}.jsonl", "w", encoding="utf-8") as fh:
+        for i, r in run.items():
+            d = {k: v for k, v in r.items() if k not in ("juez", "cobertura", "fiel", "rechazo_ok", "criticos_borrador")}
+            d["respuesta"] = r.get("borrador") or r.get("respuesta")
+            d["criticos"] = r.get("criticos_borrador", r.get("criticos"))
+            exp_units = {norm_unit(f["articulo"]) for f in items[i]["fuentes_esperadas"] if f["articulo"]} - {None}
+            if exp_units:
+                d["cita_unidad"] = float(bool(exp_units & units_in(d["respuesta"])))
+            if items[i]["modo"] == "auditor":
+                m = re.search(r"VEREDICTO:\s*(cumple parcialmente|no evaluable|no cumple|cumple)", d["respuesta"] or "", re.I)
+                d["veredicto"] = m.group(1).lower() if m else None
+                d["veredicto_ok"] = float(d["veredicto"] == items[i]["veredicto_esperado"])
+            fh.write(json.dumps(d, ensure_ascii=False) + "\n")
+    print(f"{a.out}: borradores de {a.name}")
+
+
 def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     sub = ap.add_subparsers(dest="cmd", required=True)
@@ -640,8 +707,15 @@ def main() -> None:
     rj.add_argument("--judge-model", required=True)
     rj.add_argument("--out", required=True)
     rj.add_argument("--workers", type=int, default=6)
+    ac = sub.add_parser("add-critical")
+    ac.add_argument("name")
+    ac.add_argument("--fragments-from")
+    sd = sub.add_parser("split-draft")
+    sd.add_argument("name")
+    sd.add_argument("--out", required=True)
     a = ap.parse_args()
-    {"run": cmd_run, "compare": cmd_compare, "pairwise": cmd_pairwise, "rejudge": cmd_rejudge}[a.cmd](a)
+    {"run": cmd_run, "compare": cmd_compare, "pairwise": cmd_pairwise, "rejudge": cmd_rejudge,
+     "add-critical": cmd_add_critical, "split-draft": cmd_split_draft}[a.cmd](a)
 
 
 if __name__ == "__main__":

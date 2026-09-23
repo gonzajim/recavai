@@ -25,6 +25,8 @@ docs/
 benchmarks/smoke/
 *.md
 !requirements.txt
+# Las habilidades del agente son Markdown pero forman parte del runtime.
+!src/agent/skills/*.md
 bubble_tmp.bin
 temp.js
 test_api.ps1
