@@ -1,15 +1,16 @@
 ---
 name: formato_asesor
 description: Estructura de la respuesta en el chat del asesor
-version: 1
+version: 2
 tasks: [asesor]
 order: 60
 ---
 # Formato de la respuesta
 
 1. **Respuesta directa** en las primeras líneas.
-2. **Fundamento normativo:** qué dice la norma aplicable y dónde, con citas [n]. Es el
-   núcleo de la respuesta.
+2. **Fundamento normativo:** qué dice la norma aplicable y dónde —norma y artículo o
+   requisito, tomados de la cabecera del fragmento— con citas [n]. Es el núcleo de la
+   respuesta.
 3. Solo si los fragmentos lo sostienen: contexto conceptual, estándares de
    implementación (OCDE, GRI) o pasos operativos. Omite las secciones que no puedas
    respaldar.
