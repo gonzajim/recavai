@@ -38,7 +38,7 @@
 | `SURF-API` | Orchestrator REST API | Cloud Run `orchestrator-dev`, `europe-west1` | `app.py` + `src/` |
 | `SURF-FN` | History functions | Cloud Functions `europe-west1` | `functions/index.js` |
 
-**SYS-4** Out of scope for the running service: `src/corpus_pipeline.py`, `src/rag_benchmark.py`, `src/kb_experiment.py`. These are offline/research tools and MUST NOT be imported by `app.py` or any module it loads.
+**SYS-4** Out of scope for the running service: `src/corpus_pipeline.py`, `src/chunking_v2.py`, `src/rag_benchmark.py`, `src/kb_experiment.py`. These are offline/research tools and MUST NOT be imported by `app.py` or any module it loads.
 
 ---
 
@@ -60,7 +60,7 @@
 
 ## 3. Architecture constraints
 
-**ARC-1** All client→data access MUST pass through `SURF-API`. Clients MUST NOT hold credentials for Gemini, Pinecone, Neo4j or BigQuery.
+**ARC-1** All client→data access MUST pass through `SURF-API`. Clients MUST NOT hold credentials for Gemini, Pinecone or BigQuery.
 
 **ARC-2** Embeddings MUST be computed in-process via `sentence-transformers`. No external embedding API.
 
@@ -70,7 +70,7 @@
 
 **ARC-5** `src/corpus_pipeline.embed_texts` is the single embedding entry point for offline tooling; `src/rag_service.generate_embedding` for the online service. Neither may be duplicated.
 
-**ARC-6** Failure isolation: a failure of Pinecone, Neo4j, BigQuery or FAISS MUST degrade the answer, not fail the request. Only Gemini and Firebase Auth failures may produce a 5xx/4xx.
+**ARC-6** Failure isolation: a failure of Pinecone, the normative graph, a guardrail, BigQuery or FAISS MUST degrade the answer, not fail the request. Only Gemini and Firebase Auth failures may produce a 5xx/4xx.
 
 ---
 
@@ -81,8 +81,13 @@
 | `CMP-APP` | `app.py` | HTTP routing, auth, CORS, rate limits, thread ownership, admin endpoints | production |
 | `CMP-CFG` | `src/config.py` | Env loading, client construction, embedding model, FAISS store | production |
 | `CMP-GEM` | `src/gemini_service.py` | Chat turns, tool-call loop, augmented-message construction | production |
-| `CMP-RAG` | `src/rag_service.py` | Embedding, Pinecone search, category filter, question routing, Neo4j, user-PDF chunking | production |
-| `CMP-PROMPT` | `src/assistant_instructions.py` | System prompts for auditor and advisor | production |
+| `CMP-RAG` | `src/rag_service.py` | Embedding (e5 prefixes), Pinecone search, category filter, question routing, user-PDF chunking | production |
+| `CMP-PROMPT` | `src/assistant_instructions.py` | System prompt of the auditor (the advisor's moved to `CMP-SKILLS`) | production |
+| `CMP-SKILLS` | `src/agent/skills.py`, `src/agent/skills/*.md` | Advisor instructions as versioned modules, composed per task | production |
+| `CMP-GUARD` | `src/agent/guardrails.py`, `data/normas_corpus.json` | Deterministic input/context/output guardrails | production |
+| `CMP-HARNESS` | `src/agent/harness.py` | One advisor turn: retrieve, guard, compose, generate, verify, repair, log | production |
+| `CMP-GRAPH` | `src/normative_graph.py`, `data/normative_graph.json` | In-memory normative graph: explicit references and 1-hop expansion | production |
+| `CMP-CHUNK` | `src/chunking_v2.py` | Structure-first chunking by legal unit (index v2) | offline |
 | `CMP-CAT` | `src/audit_catalog.py` | Single source of truth for audit blocks and questions; coverage and close-gate logic | production |
 | `CMP-HIST` | `src/history_service.py` | Firestore history ↔ Gemini format, role sanitisation | production |
 | `CMP-PERS` | `src/persistence_service.py`, `src/bigquery_service.py` | BigQuery turn logging and history queries | production |
@@ -223,11 +228,13 @@ user_documents/{uid}/files/{doc_id}      { doc_id, filename, chunk_count, size_b
 
 **DATA-BQ-3** BigQuery writes MUST be best-effort: failures are logged, never raised.
 
-### 6.4 Neo4j
+### 6.4 Normative graph (replaces Neo4j, retired 2026-09-23)
 
-**DATA-N4-1** Nodes labelled `Entity` with property `name`; relationships `RELATED` with property `predicate`.
+**DATA-GR-1** `data/normative_graph.json`: nodes are legal units (`<source>#art.10`, `#esrs.E1-6`, `#gri.305-1`, `#anexo.I`) with the vector ids that compose them; edges `REFERENCIA` (cross-references extracted from the text, same document) and `MODIFICA` (EUR-Lex ▼M1/▼M2 markers). Built deterministically by `scripts/build_normative_graph.py`; no LLM.
 
-**DATA-N4-2** Query is capped at 40 triples per call.
+**DATA-GR-2** Loaded in memory at startup when `RAG_NORMATIVE_GRAPH` is set. If set and it fails to load, it MUST log at ERROR (never degrade silently, cf. `DEBT-14`).
+
+**DATA-GR-3** At most 3 fragments by explicit reference (units named in the question) and 3 by 1-hop expansion per query; units with in-degree > 25 are not expanded.
 
 ---
 
@@ -290,9 +297,17 @@ max_rounds            = 6      # tool-call loop cap
 
 ### 8.1 Advisor
 
-**AGT-ADV-1** System prompt is `EXPERT_SYSTEM_PROMPT`. The advisor MUST cite retrieved fragments inline as `[n]`.
+**AGT-ADV-1** Every advisor turn MUST go through `src/agent/harness.run_turn`, with task `asesor` (chat), `herramienta` (auditor tool) or `verificacion` (compliance check). No other code path may call the model for the advisor.
 
-**AGT-ADV-2** The advisor has no tools.
+**AGT-ADV-2** The system instruction is composed from `src/agent/skills/*.md` for the task; its version hash MUST be logged with each turn (`evt=agent_turn`).
+
+**AGT-ADV-3** Grounding contract (skill `fundamentacion`): every normative datum (figure, date, threshold, article, norm number, requirement code, concrete obligation) MUST be supported by a retrieved fragment and cited `[n]`; otherwise the answer says it is not in the knowledge base. General knowledge only in the labelled section «Orientación práctica (no extraída de la normativa)», without normative data.
+
+**AGT-ADV-4** Output guardrails run on every answer. On violations the harness MUST request exactly one rewrite, serve the version with fewer violations and append a visible verification note if any remain. It MUST NOT block the answer.
+
+**AGT-ADV-5** Generation temperature 0.2.
+
+**AGT-ADV-6** The advisor has no tools.
 
 ### 8.2 Auditor
 
@@ -456,7 +471,7 @@ max_rounds            = 6      # tool-call loop cap
 | `INV-3` | The embedding model in `config.py` matches the model that built the queried index. |
 | `INV-4` | The stored `text` of a chunk is verbatim source text; enrichment never mutates it. |
 | `INV-5` | Citation numbering in `sources[]` matches the `[n]` markers in the prompt context. |
-| `INV-6` | Degradation over failure: Pinecone/Neo4j/BigQuery/FAISS errors never turn into request failures. |
+| `INV-6` | Degradation over failure: Pinecone/graph/guardrail/BigQuery/FAISS errors never turn into request failures. |
 | `INV-7` | The auditor cannot mark a block complete with unanswered `[M]` questions. Enforced server-side in `complete_audit_block`, not by the prompt. |
 | `INV-10` | The model never sees a stale conversation window: history is always the most recent messages, never the oldest. |
 | `INV-11` | A block is only ever left incomplete by explicit user request (`defer_block`), and what was recorded survives for when it is resumed. |
@@ -483,7 +498,7 @@ max_rounds            = 6      # tool-call loop cap
 | `DEBT-10` | low | `@limiter.limit` is declared above `@app.route`; limits are registered by function name so they likely apply, but this is unverified by test | `app.py` | `API-0.6` |
 | `DEBT-11` | low | Working files in repo root: `firestore-debug.log`, `bubble_tmp.bin`, `temp.js`, `test_api.ps1` | repo root | — |
 | `DEBT-13` | high | `all-MiniLM-L6-v2` caps at 256 word-pieces; 4,186 of 9,176 indexed chunks (45.6 %) exceed it, so 41.2 % of indexed word-pieces (1,057,855 of 2,567,811) never reach the vector. Those chunks hold 83.4 % of corpus words. Verified 2026-09-23: cosine between a 735-token chunk's stored vector and the embedding of only its first 254 tokens = 1.0000. Text still reaches the generator once retrieved — the defect is in **retrieval**, not context. User uploads are worse: `_CHUNK_WORDS=400` ≈ 800 word-pieces in Spanish | `src/config.py`, `src/rag_service.py` | `DEBT-4`, `RAG-*` |
-| `DEBT-14` | high | The Neo4j graph does not exist. `neo4j+s://273d9982.databases.neo4j.io` returns NXDOMAIN on 8.8.8.8 and 1.1.1.1 while the parent domain resolves — deleted Aura instance. `get_graph_context` returns `""` on any failure, so the `hybrid` route degrades silently and indistinguishably from "no entities matched". No "Graph RAG" line in 30 days of production logs. `entities`/`triplets` are `'[]'` in all 9,176 vectors. **The running system is pure semantic RAG**; docs calling it GraphRAG describe the code, not production | `src/rag_service.py`, Cloud Run env | `ARC-*`, `DEBT-3` |
+| `DEBT-14` | resolved in branch `rag-v2` (Neo4j removed from code and deploy; replaced by `CMP-GRAPH`) — high until it takes traffic | The Neo4j graph does not exist. `neo4j+s://273d9982.databases.neo4j.io` returns NXDOMAIN on 8.8.8.8 and 1.1.1.1 while the parent domain resolves — deleted Aura instance. `get_graph_context` returns `""` on any failure, so the `hybrid` route degrades silently and indistinguishably from "no entities matched". No "Graph RAG" line in 30 days of production logs. `entities`/`triplets` are `'[]'` in all 9,176 vectors. **The running system is pure semantic RAG**; docs calling it GraphRAG describe the code, not production | `src/rag_service.py`, Cloud Run env | `ARC-*`, `DEBT-3` |
 | `DEBT-15` | high | Page metadata of index v1 is wrong for most chunks: 5,883 of 9,176 (64 %) claim page 1 in documents longer than 3 pages (NEIS 966/1,205; Marco Teórico 637/958). Citations shown to users carry wrong pages; a CSDDD art. 10 chunk is labelled p.1. Measured 2026-09-23. Fixed by index v2 (`src/chunking_v2.py`: pages from the extraction itself, page_end added) — resolved when v2 takes traffic | Pinecone `uclm-corpus-roma` | `DEBT-3` |
 | `DEBT-12` | medium | 1,065 indexed chunks (12 %) carry words split by EUR-Lex line-break hyphenation (U+00AD), e.g. `empre­ sarial`, `obliga­ ciones`. Concentrated in the three legally load-bearing texts: `03_NEIS` 840, `02_CSDR` 116, `01_CSDDD` 109. Degrades both the embedding and the literal quotation shown to the user. Repair is prepared and reversible-by-recompute but **not applied**: `scripts/fix_soft_hyphens.py --apply` | Pinecone `uclm-corpus-roma` | `DEBT-3` |
 

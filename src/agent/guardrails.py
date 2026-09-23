@@ -212,7 +212,7 @@ def unsupported(answer: str, evidence: Evidence, registry: frozenset[str] = froz
 
 
 def evidence_texts(state: TurnState) -> list[str]:
-    from src.chunking_v2 import doc_title
+    from src.doc_titles import doc_title
     texts = [state.question, state.search_text]
     for d in state.used_docs:
         src = d.get("title") or ""
