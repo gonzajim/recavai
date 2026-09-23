@@ -107,3 +107,17 @@ Importa porque un índice troceado en fragmentos diminutos recupera mal: el frag
 - Fragmentos de 50 palabras o más: **5787** (63%), que contienen el **94.0%** del texto.
 - Documentos distintos indexados: **69**
 - Documentos de la carpeta sin vectores: **0**
+
+## Mantenimiento
+
+Este inventario dice qué hay, no si sigue siendo válido. Dos comprobaciones complementarias, cada una con su script:
+
+- **¿La normativa sigue vigente?** Los textos de EUR-Lex se consolidan cada vez que entra en vigor una modificación; un PDF descargado hace meses puede citar una versión ya superada sin avisar de ello.
+  ```
+  python scripts/check_eurlex_versions.py --corpus "<carpeta>"
+  ```
+- **¿El texto indexado está limpio?** Los PDF oficiales parten palabras al final de línea con un guión blando, y la partición sobrevive a la extracción.
+  ```
+  python scripts/fix_soft_hyphens.py            # diagnóstico
+  python scripts/fix_soft_hyphens.py --apply    # repara el índice
+  ```

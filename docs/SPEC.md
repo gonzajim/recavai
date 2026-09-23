@@ -473,7 +473,7 @@ max_rounds            = 6      # tool-call loop cap
 |---|---|---|---|---|
 | `DEBT-1` | high | Firestore rules grant `read, write: if true` to everyone, labelled as a local-testing placeholder | `firestore.rules` | `INV-2`, `SEC-3` |
 | `DEBT-2` | high | `/admin/ingest_document` authorises with `require_firebase_user_or_403`, not `require_admin_or_403`; any verified user can write to the global corpus | `app.py` | `API-ADM-1`, `DATA-PC-3` |
-| `DEBT-3` | low | The script that generated the production index is absent from the repo (any branch or history), so the index cannot be reproduced; `entities`/`triplets` are empty although the schema declares them. Measured 2026-09-23: 9,176 vectors, 98.4 % of corpus text indexed, median 95 words/vector — the index is **not** pathologically fragmented, contrary to what this entry claimed until that date | Pinecone `uclm-corpus-roma` | — |
+| `DEBT-3` | low | The **chunker** that produced the production index is absent from the repo (any branch or history), so chunk boundaries cannot be reproduced; `entities`/`triplets` are empty although the schema declares them. Measured 2026-09-23: 9,176 vectors, 98.4 % of corpus text indexed, median 95 words/vector — the index is **not** pathologically fragmented, contrary to what this entry claimed until that date. Also verified 2026-09-23: each stored vector is exactly `all-MiniLM-L6-v2` over its own `text` metadata, L2-normalised (cosine 1.0000 on sample), so **vectors are reproducible from the index itself** even though the boundaries are not | Pinecone `uclm-corpus-roma` | — |
 | `DEBT-4` | medium | English monolingual embedding model over a Spanish corpus | `src/config.py` | `ARC-3` (locked-in) |
 | `DEBT-5` | medium | User-PDF chunks carry no page number (pages flattened before windowing) | `src/rag_service.py` | `RAG-10` |
 | `DEBT-6` | medium | Deployed chat widget predates HEAD; the login-failure visibility fix is not live | `public/chatbot/` | `UI-6` |
@@ -482,6 +482,7 @@ max_rounds            = 6      # tool-call loop cap
 | `DEBT-9` | low | FAISS store still initialised and searched although uploads are permanent in Pinecone | `src/local_vector_store.py` | — |
 | `DEBT-10` | low | `@limiter.limit` is declared above `@app.route`; limits are registered by function name so they likely apply, but this is unverified by test | `app.py` | `API-0.6` |
 | `DEBT-11` | low | Working files in repo root: `firestore-debug.log`, `bubble_tmp.bin`, `temp.js`, `test_api.ps1` | repo root | — |
+| `DEBT-12` | medium | 1,065 indexed chunks (12 %) carry words split by EUR-Lex line-break hyphenation (U+00AD), e.g. `empre­ sarial`, `obliga­ ciones`. Concentrated in the three legally load-bearing texts: `03_NEIS` 840, `02_CSDR` 116, `01_CSDDD` 109. Degrades both the embedding and the literal quotation shown to the user. Repair is prepared and reversible-by-recompute but **not applied**: `scripts/fix_soft_hyphens.py --apply` | Pinecone `uclm-corpus-roma` | `DEBT-3` |
 
 **Remediation order:** `DEBT-1`, `DEBT-2` (security, minutes) → `DEBT-3` with benchmark gate → the rest.
 

@@ -325,6 +325,18 @@ def report(docs: list[Doc], indexed: dict[str, int] | None) -> str:
             L.append(f"\n- Indexados que no están en la carpeta: **{len(huerfanos)}**\n")
             for s in sorted(huerfanos)[:40]:
                 L.append(f"  - `{s}` ({indexed[s]} vectores)")
+
+    L.append("\n## Mantenimiento\n")
+    L.append("Este inventario dice qué hay, no si sigue siendo válido. Dos comprobaciones "
+             "complementarias, cada una con su script:\n")
+    L.append("- **¿La normativa sigue vigente?** Los textos de EUR-Lex se consolidan cada vez "
+             "que entra en vigor una modificación; un PDF descargado hace meses puede citar "
+             "una versión ya superada sin avisar de ello.\n"
+             "  ```\n  python scripts/check_eurlex_versions.py --corpus \"<carpeta>\"\n  ```")
+    L.append("- **¿El texto indexado está limpio?** Los PDF oficiales parten palabras al final "
+             "de línea con un guión blando, y la partición sobrevive a la extracción.\n"
+             "  ```\n  python scripts/fix_soft_hyphens.py            # diagnóstico\n"
+             "  python scripts/fix_soft_hyphens.py --apply    # repara el índice\n  ```")
     return "\n".join(L)
 
 
