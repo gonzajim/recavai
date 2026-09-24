@@ -5,8 +5,11 @@ Evaluación de [docs/PLAN_CONTEXTO.md](../docs/PLAN_CONTEXTO.md). Mismo instrume
 `gemini-3.5-flash`, comparación por parejas con `gemini-3.7-flash` viendo los fragmentos,
 índice `recavai-corpus-v2` con grafo, 4 hilos.
 
-**Decisión: se despliega H7** (unidades completas, niveles S/M/L, segunda pasada, sin
-razonamiento interno, planificador desactivado). Cumple todas las condiciones bloqueantes
+**Decisión: se despliega H7.** Desplegado el 24/09/2026 como `orchestrator-dev-00062-zah`
+(commit `e9fe490`); vuelta atrás: `./scripts/deploy.sh rollback dev orchestrator-dev-00060-rax`.
+
+H7: unidades completas, niveles S/M/L, segunda pasada, sin
+razonamiento interno, planificador desactivado. Cumple todas las condiciones bloqueantes
 y sube la cobertura 18 puntos (IC 95 % +11 a +26), con menos latencia que antes.
 
 ---

@@ -96,7 +96,8 @@ poder volver atrás.
 
 ### Contexto adaptativo
 
-Desde el 24/09/2026 ([PLAN_CONTEXTO.md](PLAN_CONTEXTO.md)) cada revisión fija además
+Desde el 24/09/2026 (revisión `orchestrator-dev-00062-zah`, commit `e9fe490`;
+[PLAN_CONTEXTO.md](PLAN_CONTEXTO.md)) cada revisión fija además
 cómo se construye el contexto. El almacén de unidades (`data/unidades.json.gz`) se generó
 desde el mismo índice v2 y comparte sus ids: **con el índice v1 hay que vaciar
 `_RAG_UNITS`**.
@@ -107,6 +108,9 @@ desde el mismo índice v2 y comparte sus ids: **con el índice v1 hay que vaciar
 | `_RAG_MAX_LEVEL` | `RAG_CONTEXT_MAX_LEVEL` | ver `cloudbuild.yaml` | `M` quita el nivel L y la segunda pasada |
 | `_RAG_THINKING` | `RAG_THINKING_BUDGET` | `0` | vacío: razonamiento dinámico (2-4 veces más lento con contexto grande) |
 | `_RAG_PLANNER` | `RAG_PLANNER` | `0` | — (no se ha activado nunca) |
+
+Vuelta atrás completa a la versión anterior (fragmentos, razonamiento dinámico):
+`./scripts/deploy.sh rollback dev orchestrator-dev-00060-rax`.
 
 Se pueden cambiar sin reconstruir la imagen:
 `gcloud run services update orchestrator-dev --region europe-west1 --update-env-vars RAG_CONTEXT_MAX_LEVEL=M`

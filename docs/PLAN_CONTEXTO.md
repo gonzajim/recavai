@@ -1,6 +1,7 @@
 # Plan: contexto adaptativo
 
-> **Estado (2026-09-24): ejecutado el mismo día.** Resultados en
+> **Estado (2026-09-24): ejecutado y desplegado el mismo día** (revisión
+> `orchestrator-dev-00062-zah`). Resultados en
 > [RESULTADOS_CONTEXTO.md](../benchmarks/RESULTADOS_CONTEXTO.md). En resumen:
 > - Fase 0: el razonamiento dinámico era lo que disparaba la latencia; se quita
 >   (`RAG_THINKING_BUDGET=0`).

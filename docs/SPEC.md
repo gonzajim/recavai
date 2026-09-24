@@ -7,7 +7,7 @@
 |---|---|
 | `spec_version` | 1.2.0 |
 | `generated_at` | 2026-09-19 · updated 2026-09-23 (index v2, normative graph, advisor agent) |
-| `derived_from_commit` | `d843c20` (branch `rag-v2`), deployed as Cloud Run revision `orchestrator-dev-00060-rax` |
+| `derived_from_commit` | `e9fe490` (branch `rag-v2`), deployed as Cloud Run revision `orchestrator-dev-00062-zah` (2026-09-24; previous: `00060-rax`) |
 | `source_of_truth` | The code. This spec describes observed behaviour, not intent. Where they diverge, the code wins and this spec is a defect. |
 | `language_of_system` | Spanish (UI, prompts, corpus) |
 | `language_of_spec` | English |
@@ -549,6 +549,7 @@ MAX_QUERIES           = 4
 | `DEBT-20` | open · low | `primary_category` values inherited from v1 (`data/categorias_v1.json`) are inconsistent (e.g. OECD agriculture guide labelled `GRI`) and drive the category filter | `data/categorias_v1.json` | `RAG-3` |
 | `DEBT-21` | open · medium | Colloquial questions remain the weakest type after adaptive context (coverage 47 % → 56 %, key facts in context 54 %): users ask in words the norm does not use. The planner raised them to 88 % in context but lowered definitions and amendments; neither tested variant passed its rule | `src/agent/planner.py` | `RAG-15` |
 | `DEBT-22` | open · low | `data/unidades.json.gz` is derived from the index `.npz`; rebuilding the index without regenerating it would expand candidates with stale text or miss ids (unknown ids fall back to single fragments, silently) | `scripts/build_unit_store.py` | `RAG-11`, `VER-3` |
+| `DEBT-24` | open · medium | The image runs Python 3.10; Google client libraries (`google.api_core`, BigQuery, Firestore) warn that they stop supporting it on 2026-10-04 | `Dockerfile` | — |
 | `DEBT-23` | open · low | User-uploaded PDFs are not expanded (no unit store for them): a question about the user's own document still gets up to 6 fragments of 250 words | `src/context_builder.py`, `src/rag_service.py` | `RAG-11` |
 
 **Remediation order:** `DEBT-18` (operational, minutes: auto-reload + separate evaluation key) → `DEBT-19` → `DEBT-16`, `DEBT-17` (need a decision) → the rest.

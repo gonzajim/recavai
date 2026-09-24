@@ -717,6 +717,12 @@
           <span class="debt-meta">Dockerfile · Cloud Run</span>
         </div></div>
 
+        <div class="debt-item"><div class="sev sev-md"></div><div class="debt-body">
+          <b>Python 3.10 pierde soporte de las bibliotecas de Google</b>
+          <p>La imagen usa Python 3.10, y las bibliotecas de Google Cloud (BigQuery, Firestore) avisan en el arranque de que dejan de darle soporte el 4 de octubre de 2026. Hay que subir la imagen a 3.11 o posterior y volver a pasar las pruebas.</p>
+          <span class="debt-meta">Dockerfile</span>
+        </div></div>
+
         <div class="debt-item"><div class="sev sev-lo"></div><div class="debt-body">
           <b>El almacén de unidades depende del índice</b>
           <p>El texto con el que se amplían los fragmentos sale del mismo fichero que se cargó en Pinecone. Si se reconstruye el índice sin regenerar el almacén, la ampliación usaría texto viejo, o dejaría sin ampliar los fragmentos nuevos sin avisar.</p>
