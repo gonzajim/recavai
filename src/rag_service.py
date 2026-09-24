@@ -39,6 +39,8 @@ def generate_embedding(embed_model, text: str, is_query: bool = True) -> list[fl
 _MIN_SCORE = float(os.getenv("RAG_MIN_SCORE", "0.55"))
 _CANDIDATE_K = 12     # Retrieve this many candidates before score-filtering
 _MAX_RESULTS = 6      # Cap on chunks passed to the LLM after filtering
+# Con almacén de unidades (src/context_builder.py) se llama con max_results=None: no hay
+# tope de fragmentos, manda el presupuesto de tokens del nivel.
 
 
 def search_documents(
@@ -48,6 +50,7 @@ def search_documents(
     metadata_filter: dict | None = None,
     min_score: float = _MIN_SCORE,
     namespace: str | None = None,
+    max_results: int | None = _MAX_RESULTS,
 ) -> list[dict]:
     """
     Queries Pinecone and returns matching document excerpts.
@@ -80,6 +83,7 @@ def search_documents(
                 continue
             meta = match.get("metadata", {})
             results.append({
+                "id": match.get("id"),
                 "content": meta.get("text") or meta.get("content", ""),
                 "title": meta.get("source") or meta.get("title", ""),
                 "category": meta.get("primary_category", "uploaded"),
@@ -92,7 +96,7 @@ def search_documents(
                 "unit_label": meta.get("unit_label"),
             })
 
-        return results[:_MAX_RESULTS]
+        return results[:max_results] if max_results else results
     except Exception:
         logger.error("Pinecone search failed", exc_info=True)
         return []

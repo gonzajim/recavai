@@ -5,7 +5,7 @@
 
 | Field | Value |
 |---|---|
-| `spec_version` | 1.1.0 |
+| `spec_version` | 1.2.0 |
 | `generated_at` | 2026-09-19 · updated 2026-09-23 (index v2, normative graph, advisor agent) |
 | `derived_from_commit` | `d843c20` (branch `rag-v2`), deployed as Cloud Run revision `orchestrator-dev-00060-rax` |
 | `source_of_truth` | The code. This spec describes observed behaviour, not intent. Where they diverge, the code wins and this spec is a defect. |
@@ -244,9 +244,9 @@ user_documents/{uid}/files/{doc_id}      { doc_id, filename, chunk_count, size_b
 
 ```python
 # src/rag_service.py
-_CANDIDATE_K          = 12     # corpus candidates fetched
+_CANDIDATE_K          = 12     # corpus candidates fetched (fragment mode)
 _MIN_SCORE            = float(env RAG_MIN_SCORE, default 0.55)  # 0.841 with e5-small (scripts/calibrate_threshold.py)
-_MAX_RESULTS          = 6      # corpus chunks passed to the LLM
+_MAX_RESULTS          = 6      # corpus chunks passed to the LLM (fragment mode; unit mode passes max_results=None)
 _USER_DOCS_MIN_SCORE  = 0.25   # user-namespace cutoff
 _MAX_USER_FILES       = 25
 _CHUNK_WORDS          = 250    # user-PDF fixed window (≈350 e5 tokens, under 512)
@@ -261,14 +261,29 @@ _WORKERS              = int(env RAG_SEARCH_WORKERS, default 4)
 
 # src/gemini_service.py
 _GEMINI_MODEL         = "gemini-2.5-flash"
-_CONTEXT_BUDGET       = {"gemini-2.5-flash": 180_000,
-                         "gemini-2.5-flash-lite": 180_000,
-                         "gemini-2.5-pro": 540_000}   # characters
+_CONTEXT_BUDGET       = {"gemini-2.5-flash": 400_000,
+                         "gemini-2.5-flash-lite": 400_000,
+                         "gemini-2.5-pro": 540_000}   # characters; absolute safety cap (the level budget is the real limit)
 _GRAPH_EXPAND         = 3      # max fragments per query from explicit references and from 1-hop expansion
+_RRF_K                = 60     # reciprocal rank fusion (planner queries only)
+
+# src/context_builder.py  (active when RAG_UNIT_STORE is set)
+CHARS_PER_TOKEN       = 4.18   # measured with Gemini countTokens on the corpus
+CANDIDATE_K           = 30     # corpus candidates, no cap of 6
+SECOND_PASS_K         = 50
+LEVELS                = {"S": Level(budget=6_000,  unit_max=6_000,  window=1),
+                         "M": Level(budget=12_000, unit_max=4_000,  window=1),
+                         "L": Level(budget=45_000, unit_max=17_000, window=3)}   # tokens
 
 # src/agent/harness.py
-GenerationPolicy(temperature=0.2, max_output_tokens=8192, max_repairs=1)
+GenerationPolicy(temperature=0.2, max_output_tokens=8192, max_repairs=1, second_pass_max_ms=8000)
+thinking_budget       = int(env RAG_THINKING_BUDGET) or None (dynamic)          # production: 0
 max_rounds            = 6      # tool-call loop cap
+
+# src/agent/planner.py  (active only when RAG_PLANNER=1; production: 0)
+PLANNER_MODEL         = "gemini-2.5-flash-lite"   # thinking_budget=0, temperature 0, JSON schema
+PLANNER_TIMEOUT_S     = 2.0
+MAX_QUERIES           = 4
 ```
 
 ### 7.2 Retrieval order
@@ -283,13 +298,25 @@ max_rounds            = 6      # tool-call loop cap
 
 **RAG-5** When `RAG_NORMATIVE_GRAPH` is set, the normative graph MUST be applied to every question: explicit references first (≤ `_GRAPH_EXPAND`), then 1-hop expansion from retrieved units (≤ `_GRAPH_EXPAND`, excluding hubs with in-degree > 25), neighbours ranked by cosine to the query.
 
-**RAG-6** Chunks are appended to the context while `used_chars + len(chunk) <= char_budget`. A chunk that does not fit MUST still appear in `sources[]` (so citation numbering stays stable) but MUST NOT be added to the prompt text.
+**RAG-6** Blocks are appended to the context while `used_chars + len(block) <= char_budget`. A block that does not fit MUST still appear in `sources[]` (so citation numbering stays stable) but MUST NOT be added to the prompt text. In unit mode (`RAG-11`) the level budget is applied before this cap, so the cap only acts as a safety net.
 
 **RAG-7** Chunk header format in the prompt: `[{i}] {title} ({unit_label}, {category}, p.{page}[-{page_end}]/{total_pages}, relevancia={score:.2f})`, with `unit_label` only when present.
 
 **RAG-8** If no chunks fit, the user message is sent with only the guardrail notices (if any), otherwise unaugmented.
 
 **RAG-9** Retrieval failure MUST be caught and degrade to the unaugmented message (`ARC-6`).
+
+### 7.2b Adaptive context (since 2026-09-24, `docs/PLAN_CONTEXTO.md`)
+
+**RAG-11** When `RAG_UNIT_STORE` points to `data/unidades.json.gz`, the corpus search MUST fetch `CANDIDATE_K` candidates without the cap of 6, and `context_builder.build_blocks` MUST: (a) expand each candidate, in priority order (explicit reference, search, graph), to its whole unit if the unit fits `unit_max` of the level, otherwise to a same-unit window of ±`window` chunks; (b) add expansions until the level budget; (c) present blocks grouped by document (documents ordered by their best candidate) and, within a document, in text order; (d) join consecutive chunks removing the `chunking_v2` overlap sentence. Each block is one `[n]` with its header (`RAG-7`). Fragments not in the store (user PDFs) pass through as single blocks, first. Without the store, one block per fragment (previous behaviour).
+
+**RAG-12** Level selection (`harness.choose_level`): task `verificacion` → S; enumeration or panorama (planner type, or `_WIDE` regex without planner) → L; a unit named in the question with a point question → S; otherwise M. Task `herramienta` is capped at M. `RAG_CONTEXT_MAX_LEVEL` caps every level. Level L with a planner «panorama» of a single norm that fits (CSDDD, CSRD) MUST load that whole document.
+
+**RAG-13** Second pass (Self-Route): if the draft contains an abstention (`guardrails.abstentions`), the first draft took less than `second_pass_max_ms`, a higher level is allowed and there is no `referencia_desconocida` notice, the harness MUST retrieve again with `SECOND_PASS_K` candidates, build the next level and generate exactly once more; it serves the draft with fewer abstentions.
+
+**RAG-14** In unit mode, `sources[]` returned to the client MUST contain only the blocks cited in the final answer, keeping their numbers.
+
+**RAG-15** The planner (`src/agent/planner.py`), when enabled, runs in parallel with the question's search; its output MUST be used only for retrieval (queries fused by RRF, the question weighted as all reformulations together) and level selection, never passed to the answering model; norms outside `NORMS` MUST be dropped; on error or timeout the turn continues without it (`ARC-6`). Disabled in production: it failed its pre-registered adoption rule on 2026-09-24.
 
 ### 7.3 User-PDF chunking (current behaviour)
 
@@ -307,9 +334,9 @@ max_rounds            = 6      # tool-call loop cap
 
 **AGT-ADV-3** Grounding contract (skill `fundamentacion`): every normative datum (figure, date, threshold, article, norm number, requirement code, concrete obligation) MUST be supported by a retrieved fragment and cited `[n]`; otherwise the answer says it is not in the knowledge base. General knowledge only in the labelled section «Orientación práctica (no extraída de la normativa)», without normative data.
 
-**AGT-ADV-4** Output guardrails run on every answer. On violations the harness MUST request exactly one rewrite, serve the version with fewer violations and append a visible verification note if any remain. It MUST NOT block the answer.
+**AGT-ADV-4** Output guardrails run on every answer: `DatosCriticos` (critical data not in any fragment nor the question), `CitasInexistentes` (citations to fragments not received) and `CitaSinRespaldo` (a critical datum in a segment ending in `[n]` that is in the knowledge base but not in the cited fragment). On violations the harness MUST request exactly one rewrite, serve the version with fewer violations and append a visible verification note if any `DatosCriticos` or `CitasInexistentes` violation remains (`CitaSinRespaldo` is logged, not annotated: the datum does exist). It MUST NOT block the answer.
 
-**AGT-ADV-5** Generation temperature 0.2.
+**AGT-ADV-5** Generation temperature 0.2. Internal reasoning budget from `RAG_THINKING_BUDGET` (production `0`; empty = dynamic). Measured 2026-09-24: with 12k tokens of context, dynamic 10.4 s vs 4.4 s without reasoning; with 40k, 23.0 s vs 5.9 s.
 
 **AGT-ADV-6** The advisor has no tools.
 
@@ -466,11 +493,13 @@ max_rounds            = 6      # tool-call loop cap
 
 **QA-5** Any change to retrieval, the embedding model, the index or the advisor's skills MUST be measured before and after with the development battery (`QA-6`), with the decision rule written before measuring.
 
-**QA-6** Development battery: `benchmarks/bateria_v1.jsonl` (60 items, 13 types, expected sources with unit, 175 key facts verified against the corpus), run by `scripts/eval_battery.py` through the production harness. Metrics: retrieval (`doc@6`, `pasaje@6`, `pag@6`, `mrr`), deterministic fidelity (`criticos`), judge-scored (`cobertura`, `fiel`, `rechazo_ok`, `veredicto_ok`, `cita_unidad`), latency. It is NOT the golden set (`QA-3`) and MUST NOT be edited to favour a change.
+**QA-6** Development battery: `benchmarks/bateria_v1.jsonl` (60 items, 13 types, expected sources with unit, 175 key facts verified against the corpus), run by `scripts/eval_battery.py` through the production harness. Metrics: retrieval (`hechos_ctx` — fraction of key facts whose passage reached the model —, `doc@6`, `pasaje@6`, `pag@6`, `mrr`), deterministic fidelity (`criticos`, `cita_ok`), judge-scored (`cobertura`, `fiel`, `rechazo_ok`, `veredicto_ok`, `cita_unidad`), latency. With adaptive context, `mrr` and `pag@6` lose meaning (blocks are in text order, not similarity order). It is NOT the golden set (`QA-3`) and MUST NOT be edited to favour a change.
 
-**QA-7** Evaluation hygiene: the same judge for every configuration compared (`rejudge`); two passes for generation-dependent metrics (fidelity ±13 pts, coverage ±6 between identical runs); pairwise judges MUST see the fragments (`--with-context`), because without them they judge by their own pre-2026 knowledge.
+**QA-7** Evaluation hygiene: the same judge for every configuration compared (`rejudge`); two passes for generation-dependent metrics (fidelity ±13 pts, coverage ±6 between identical runs); pairwise judges MUST see the fragments (`--with-context`), because without them they judge by their own pre-2026 knowledge. Judges see up to `JUDGE_FRAGMENT_CHARS` = 80,000 characters per fragment (before 2026-09-24: 1,500-2,000, which penalised whole-unit blocks). A run MUST abort on the first HTTP 402 (shared credit, `DEBT-18`).
 
 **QA-8** Results as of 2026-09-23 (production before → after): passage retrieved 35 % → 68 %; correct page 3 % → 60 %; answers with no unsupported claim 17 % → 90 %; unsupported critical data per answer 0.42 → 0; traps 1/3 → 3/3; latency p50 12 s → 8 s. Blind pairwise with fragments on 40 held-out real questions: new 36, old 4. Details: `docs/RAG_V2_RESULTADOS.md`, `benchmarks/RESULTADOS_FIDELIDAD.md`.
+
+**QA-9** Results as of 2026-09-24, adaptive context (H4 → H7, `benchmarks/RESULTADOS_CONTEXTO.md`): key facts in context 58 % → 83 %; coverage 63 % → 81 % (paired bootstrap 95 % CI +11 to +26 pts); answers with no unsupported claim 90 % → 95 %; unsupported critical data per answer 0 → 0; contradictions 3 → 2; traps 3/3; cited data found in the cited fragment 96 % → 99.7 %; latency p50/p95 7.7/15.1 s → 5.7/11.6 s; cost per question ~0.003 $ → ~0.006 $. Blind pairwise with fragments: battery 37–17 (6 ties); 40 held-out real questions 29–8 (3 ties), real-question latency p50/p95 7.8/15.4 s, second pass in 4/40. The planner failed its pre-registered rule (`RAG-15`, `DEBT-21`).
 
 ---
 
@@ -518,6 +547,9 @@ max_rounds            = 6      # tool-call loop cap
 | `DEBT-18` | open · medium | Production and development Gemini keys draw on one prepaid credit; an evaluation exhausted it on 2026-09-23 and production returned 402 until top-up | AI Studio billing | `INV-6` |
 | `DEBT-19` | open · medium | Cloud Run marks the revision ready when gunicorn opens the port, before the app imports; an idle new instance is CPU-throttled and the first request waits ~35-45 s. Needs an HTTP startup probe on `/health` or `--min-instances=1` | Cloud Run, `Dockerfile` | — |
 | `DEBT-20` | open · low | `primary_category` values inherited from v1 (`data/categorias_v1.json`) are inconsistent (e.g. OECD agriculture guide labelled `GRI`) and drive the category filter | `data/categorias_v1.json` | `RAG-3` |
+| `DEBT-21` | open · medium | Colloquial questions remain the weakest type after adaptive context (coverage 47 % → 56 %, key facts in context 54 %): users ask in words the norm does not use. The planner raised them to 88 % in context but lowered definitions and amendments; neither tested variant passed its rule | `src/agent/planner.py` | `RAG-15` |
+| `DEBT-22` | open · low | `data/unidades.json.gz` is derived from the index `.npz`; rebuilding the index without regenerating it would expand candidates with stale text or miss ids (unknown ids fall back to single fragments, silently) | `scripts/build_unit_store.py` | `RAG-11`, `VER-3` |
+| `DEBT-23` | open · low | User-uploaded PDFs are not expanded (no unit store for them): a question about the user's own document still gets up to 6 fragments of 250 words | `src/context_builder.py`, `src/rag_service.py` | `RAG-11` |
 
 **Remediation order:** `DEBT-18` (operational, minutes: auto-reload + separate evaluation key) → `DEBT-19` → `DEBT-16`, `DEBT-17` (need a decision) → the rest.
 
@@ -541,7 +573,11 @@ python benchmarks/bateria_v1.py --verify .cache/corpus_txt
 # Retrieval-only battery run on the production configuration (no Gemini cost)
 python scripts/eval_battery.py run --name check --index recavai-corpus-v2 \
   --model intfloat/multilingual-e5-small --min-score 0.841 \
-  --graph data/normative_graph.json --no-generate
+  --graph data/normative_graph.json --units data/unidades.json.gz --no-generate
+
+# Unit store matches the graph (381 units, same ids) and loads
+python -c "import gzip,json; u=json.load(gzip.open('data/unidades.json.gz')); g=json.load(open('data/normative_graph.json')); \
+  k={k for k,n in g['nodes'].items() if n['ids']}; print(len(k), sum(u['units'][x]['ids']==g['nodes'][x]['ids'] for x in k))"
 
 # Full battery with judge (≈120 Gemini calls) and comparison with the last accepted run
 python scripts/eval_battery.py run --name X ... --judge-model gemini-3.5-flash
@@ -560,7 +596,7 @@ curl -s https://orchestrator-dev-370417116045.europe-west1.run.app/health
 
 **VER-1** A change to `app.py` routing MUST be accompanied by the first command's output.
 **VER-2** A change to retrieval, the index, the embedding model or the advisor's skills MUST be accompanied by the battery comparison (`QA-5`, `QA-6`).
-**VER-3** A change to chunking MUST go to a new index (never the serving one), with the graph and norm registry regenerated (`scripts/build_normative_graph.py`, `scripts/build_norm_registry.py`) and the threshold recalibrated (`scripts/calibrate_threshold.py`).
+**VER-3** A change to chunking MUST go to a new index (never the serving one), with the graph, norm registry and unit store regenerated (`scripts/build_normative_graph.py`, `scripts/build_norm_registry.py`, `scripts/build_unit_store.py`) and the threshold recalibrated (`scripts/calibrate_threshold.py`).
 
 ---
 
@@ -579,7 +615,8 @@ curl -s https://orchestrator-dev-370417116045.europe-west1.run.app/health
 |---|---|
 | `docs/documentacion.html` | Human narrative of this spec |
 | `DOCUMENTACION.md` | Earlier long-form documentation (August 2026). **Superseded**: describes Neo4j, the monolithic advisor prompt and index v1 |
-| `docs/AGENTE.md` | Advisor agent: skills, guardrails, harness, logging |
+| `docs/AGENTE.md` | Advisor agent: skills, guardrails, harness, adaptive context, logging |
+| `docs/PLAN_CONTEXTO.md`, `benchmarks/RESULTADOS_CONTEXTO.md` | Adaptive context: plan (with pre-registered rule) and evaluation |
 | `docs/ARQUITECTURA_DATOS.md` | Measured state of corpus, indexes, model and graph (v2 now, v1 before) |
 | `docs/DESPLIEGUE.md`, `docs/DESARROLLO.md` | Deploy/rollback procedure; local development |
 | `benchmarks/README.md` | How to run the battery, the judge, pairwise comparisons and the Línea 1 experiment |

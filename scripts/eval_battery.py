@@ -61,6 +61,11 @@ sys.path.insert(0, str(ROOT))
 OUT = ROOT / "results" / "rag_v2"
 from benchmarks.bateria_v1 import _fold, _words      # noqa: E402  mismo criterio que --verify
 BATTERY = ROOT / "benchmarks" / "bateria_v1.jsonl"
+# Lo que ve el juez de cada fragmento. Con el contexto adaptativo un bloque es un artículo
+# entero (hasta ~17.000 tokens en el nivel L): cortarlo a 1.500-2.000 caracteres, como
+# antes, hacía pasar por inventados datos que el modelo sí tenía delante. Cambio de
+# instrumento del 24/09/2026; en H4 no altera nada (sus fragmentos no pasan de 1.800).
+JUDGE_FRAGMENT_CHARS = 80_000
 
 
 # ======================================================================================
@@ -97,7 +102,7 @@ class MemoryIndex:
             m = self.meta[i]
             if allowed is not None and m.get("primary_category") not in allowed:
                 continue
-            out.append({"score": float(scores[i]), "metadata": m, "id": str(i)})
+            out.append({"score": float(scores[i]), "metadata": m, "id": m.get("id", str(i))})
             if len(out) >= top_k:
                 break
         return {"matches": out}
@@ -190,7 +195,7 @@ def judge(genai_client, model: str, item: dict, answer: str, fragments: list[dic
         pages = f"{f.get('page')}" + (f"-{f['page_end']}" if f.get("page_end") and f.get("page_end") != f.get("page") else "")
         unit = f"{f['unit_label']} · " if f.get("unit_label") else ""
         return f"[{i}] {f.get('title','')} ({unit}p.{pages})"
-    frag = "\n\n".join(f"{head(i, f)}\n{(f.get('content') or '')[:2000]}"
+    frag = "\n\n".join(f"{head(i, f)}\n{(f.get('content') or '')[:JUDGE_FRAGMENT_CHARS]}"
                        for i, f in enumerate(fragments, 1)) or "(ninguno)"
     extra = f"NOTA DEL EVALUADOR HUMANO: {item['nota']}" if item.get("nota") else ""
     if item["debe_rechazar"]:
@@ -230,11 +235,17 @@ def load_queries(path: Path) -> list[dict]:
              "veredicto_esperado": None, "nota": ""} for k, r in enumerate(rows, 1)]
 
 
-def setup(index_spec: str, model_name: str, min_score: float, graph: str | None = None):
+def setup(index_spec: str, model_name: str, min_score: float, graph: str | None = None,
+          units: str | None = None, planner: bool = False, max_level: str = "L", thinking: str = ""):
     from dotenv import load_dotenv
     load_dotenv(ROOT / ".env")
     os.environ["EMBEDDING_MODEL_NAME"] = model_name      # lo lee rag_service para el prefijo e5
     os.environ["RAG_NORMATIVE_GRAPH"] = graph or ""      # lo lee src/normative_graph al primer uso
+    # Contexto adaptativo (docs/PLAN_CONTEXTO.md): las mismas variables que producción
+    os.environ["RAG_UNIT_STORE"] = units or ""
+    os.environ["RAG_PLANNER"] = "1" if planner else "0"
+    os.environ["RAG_CONTEXT_MAX_LEVEL"] = max_level
+    os.environ["RAG_THINKING_BUDGET"] = thinking
     from sentence_transformers import SentenceTransformer
     from src import gemini_service as gs, rag_service as rs
     from src.config import genai_client
@@ -254,10 +265,10 @@ def setup(index_spec: str, model_name: str, min_score: float, graph: str | None 
     original = rs.search_documents
 
     def spy(pinecone_index, query_embedding, top_k=rs._CANDIDATE_K, metadata_filter=None,
-            min_score=None, namespace=None):
+            min_score=None, namespace=None, **kw):
         t0 = time.time()
         res = original(pinecone_index, query_embedding, top_k=top_k, metadata_filter=metadata_filter,
-                       min_score=min_score_value if min_score is None else min_score, namespace=namespace)
+                       min_score=min_score_value if min_score is None else min_score, namespace=namespace, **kw)
         captured.calls = getattr(captured, "calls", []) + [res]
         captured.ms = getattr(captured, "ms", 0.0) + (time.time() - t0) * 1000
         return res
@@ -295,9 +306,15 @@ def score_retrieval(item: dict, docs: list[dict]) -> dict:
         ws = _words(h)
         return any(sum(1 for w in ws if w in b) / max(1, len(ws)) >= 0.6 for b in bags)
     pasaje = any(covered(h) for h in item["hechos_clave"]) if not item["debe_rechazar"] else None
+    # hechos_ctx: fracción de hechos clave cuyo pasaje llegó al modelo (el techo de la
+    # cobertura: lo que no está en el contexto no se puede citar).
+    hechos = ([covered(h) for h in item["hechos_clave"]]
+              if not item["debe_rechazar"] and item["hechos_clave"] else None)
     first = next((i for i, d in enumerate(docs, 1) if any(hit(d, e) for e in exp)), None)
     found = sum(1 for e in exp if any(hit(d, e) for d in docs))
     out = {"pasaje@6": float(pasaje)} if pasaje is not None else {}
+    if hechos:
+        out["hechos_ctx"] = sum(hechos) / len(hechos)
     return out | {"doc@6": float(doc_ok), "pag@6": float(first is not None),
             "mrr": (1.0 / first) if first else 0.0, "fuentes": found / len(exp)}
 
@@ -320,9 +337,30 @@ def critical_count(answer: str, docs: list[dict], question: str) -> float | None
     return float(len(gr.unsupported(body, gr.build_evidence(gr.evidence_texts(st)), gr.norm_registry())))
 
 
+def citation_precision(answer: str, docs: list[dict], question: str) -> dict:
+    """cita_ok: de los datos críticos de los tramos citados, fracción que está en el
+    fragmento que se cita (y no en otro). Determinista, mismo criterio que el control
+    CitaSinRespaldo del harness."""
+    if not answer:
+        return {}
+    from src.agent import guardrails as gr
+    if not hasattr(gr, "citation_check"):
+        return {}
+    body = answer.split("\n\n---\n*Verificación automática:")[0]
+    used = [dict(d, index=d.get("index") or i) for i, d in enumerate(docs, 1)]
+    c = gr.citation_check(body, used, question)
+    total = c["ok"] + len(c["wrong"])
+    return {"cita_ok": c["ok"] / total} if total else {}
+
+
+_ABORT = threading.Event()
+
+
 def run_item(item, gs, embed, index, genai_client, captured, judge_model, generate=True) -> dict:
     captured.calls, captured.ms, captured.graph_docs, captured.direct_docs = [], 0.0, [], []
     rec = {"id": item["id"], "tipo": item["tipo"], "pregunta": item["pregunta"]}
+    if _ABORT.is_set():
+        return rec | {"error": "abortado: crédito agotado"}
     t0 = time.time()
     try:
         retrieval_query = None
@@ -336,7 +374,7 @@ def run_item(item, gs, embed, index, genai_client, captured, judge_model, genera
         else:
             query = item["pregunta"]
         kw = {"retrieval_query": retrieval_query} if retrieval_query else {}
-        turn = None
+        turn, turn_used = None, None
         if generate and HAS_HARNESS(gs):
             # Con harness: la misma ruta y la misma tarea que usa producción, y el resultado
             # completo (borrador, controles que saltaron, fragmentos exactos del contexto).
@@ -346,11 +384,25 @@ def run_item(item, gs, embed, index, genai_client, captured, judge_model, genera
         elif generate:
             answer, _sources = gs.chat_with_expert(genai_client, embed, index, [], query, **kw)
         else:
-            gs._build_rag_message(embed, index, query, **kw)
+            from src.agent import harness as _h
+            if hasattr(_h, "gather_context"):
+                # La misma primera fase que run_turn (planificador, nivel, bloques): lo que
+                # llegaría al modelo, no los candidatos de Pinecone.
+                ctx = _h.gather_context(genai_client, embed, index, query,
+                                        task="verificacion" if item["modo"] == "auditor" else "asesor", **kw)
+                _, _, turn_used = gs.format_context(ctx.blocks, query)
+                rec["nivel"] = ctx.level
+                rec["plan"] = ctx.plan.as_dict() if ctx.plan else None
+            else:
+                gs._build_rag_message(embed, index, query, **kw)
             answer = ""
     except Exception as e:                            # noqa: BLE001
         rec["error"] = f"{type(e).__name__}: {e}"
-        answer, turn = "", None
+        answer, turn, turn_used = "", None, None
+        if "402" in str(e) or "prepay" in str(e).lower():
+            _ABORT.set()
+            print("\nCRÉDITO DE GEMINI AGOTADO (402): se abandona la ejecución. Producción comparte "
+                  "el crédito: recárgalo YA.", file=sys.stderr)
     rec["ms_total"] = round((time.time() - t0) * 1000)
     rec["ms_busqueda"] = round(captured.ms)
     # Lo que realmente llegó al modelo: referencia explícita delante, búsqueda, grafo detrás.
@@ -359,11 +411,16 @@ def run_item(item, gs, embed, index, genai_client, captured, judge_model, genera
     seen = {(d.get("title"), (d.get("content") or "")[:80]) for d in direct}
     docs = direct + [d for d in docs if (d.get("title"), (d.get("content") or "")[:80]) not in seen]
     docs = docs + getattr(captured, "graph_docs", [])
+    if turn_used is not None:
+        docs = turn_used
     if turn is not None:
         docs = turn.used_docs                      # exactamente lo que entró en el contexto
         rec["borrador"] = turn.draft
         rec["agente"] = turn.report()
+        rec["nivel"] = turn.level
+        rec["plan"] = turn.plan
         rec["avisos"] = [n["guard"] for n in turn.notices]
+    rec["tokens_contexto"] = round(sum(len(d.get("content") or "") for d in docs) / 4.18)
     rec["recuperados"] = [{"title": d.get("title"), "page": d.get("page"), "page_end": d.get("page_end"),
                            "article": d.get("article"), "unit_label": d.get("unit_label"),
                            "category": d.get("category"), "score": round(d.get("score", 0), 4),
@@ -374,6 +431,7 @@ def run_item(item, gs, embed, index, genai_client, captured, judge_model, genera
 
     rec["respuesta"] = answer
     rec["criticos"] = critical_count(answer, docs, item["pregunta"])
+    rec.update(citation_precision(answer, docs, item["pregunta"]))
     if "borrador" in rec:
         rec["criticos_borrador"] = critical_count(rec["borrador"], docs, item["pregunta"])
     exp_units = {norm_unit(f["articulo"]) for f in item["fuentes_esperadas"] if f["articulo"]} - {None}
@@ -397,7 +455,8 @@ def cmd_run(a) -> None:
         items = [it for it in items if it["id"] in set(a.only.split(","))]
     if a.limit:
         items = items[: a.limit]
-    gs, embed, index, genai_client, captured = setup(a.index, a.model, a.min_score, a.graph)
+    gs, embed, index, genai_client, captured = setup(a.index, a.model, a.min_score, a.graph,
+                                                     a.units, a.planner, a.max_level, a.thinking)
 
     OUT.mkdir(parents=True, exist_ok=True)
     path = OUT / f"{a.name}.jsonl"
@@ -419,7 +478,8 @@ def cmd_run(a) -> None:
             fh.write(json.dumps(r, ensure_ascii=False) + "\n")
     meta = {"name": a.name, "index": a.index, "model": a.model, "min_score": a.min_score, "graph": a.graph,
             "judge": a.judge_model, "battery_sha256": _sha(BATTERY), "at": time.strftime("%Y-%m-%d %H:%M:%S"),
-            "generate": not a.no_generate, "queries": a.queries}
+            "generate": not a.no_generate, "queries": a.queries, "units": a.units, "planner": a.planner,
+            "max_level": a.max_level, "thinking": a.thinking or "dinámico"}
     (OUT / f"{a.name}.meta.json").write_text(json.dumps(meta, indent=2, ensure_ascii=False))
     print_summary(a.name, results)
 
@@ -432,7 +492,8 @@ def _sha(p: Path) -> str:
 # ======================================================================================
 # Resumen y comparación
 # ======================================================================================
-METRICS = ["criticos", "criticos_borrador", "doc@6", "pasaje@6", "pag@6", "mrr", "fuentes", "cobertura", "fiel", "cita_unidad", "rechazo_ok", "veredicto_ok"]
+METRICS = ["criticos", "criticos_borrador", "hechos_ctx", "doc@6", "pasaje@6", "pag@6", "mrr", "fuentes",
+           "cobertura", "fiel", "cita_unidad", "cita_ok", "rechazo_ok", "veredicto_ok"]
 
 
 def load_run(name: str) -> dict[str, dict]:
@@ -552,7 +613,7 @@ def _fmt_context(rec: dict) -> str:
         return "(ningún fragmento)"
     return "\n\n".join(f"[{i}] {f.get('title','').split('/')[-1]} "
                         f"({(f.get('unit_label') + ' · ') if f.get('unit_label') else ''}p.{f.get('page')})\n"
-                        f"{(f.get('content') or '')[:1200]}" for i, f in enumerate(frs, 1))
+                        f"{(f.get('content') or '')[:JUDGE_FRAGMENT_CHARS]}" for i, f in enumerate(frs, 1))
 
 
 def _fragments_for_judge(b: dict, n: dict) -> str:
@@ -562,7 +623,7 @@ def _fragments_for_judge(b: dict, n: dict) -> str:
     def fmt(frs):
         return "\n\n".join(f"[{i}] {f.get('title','').split('/')[-1]} "
                             f"({(f.get('unit_label') + ' · ') if f.get('unit_label') else ''}p.{f.get('page')})\n"
-                            f"{(f.get('content') or '')[:1500]}" for i, f in enumerate(frs, 1)) or "(ninguno)"
+                            f"{(f.get('content') or '')[:JUDGE_FRAGMENT_CHARS]}" for i, f in enumerate(frs, 1)) or "(ninguno)"
     kb = [(f.get("title"), (f.get("content") or "")[:80]) for f in b.get("recuperados") or []]
     kn = [(f.get("title"), (f.get("content") or "")[:80]) for f in n.get("recuperados") or []]
     if kb == kn:
@@ -580,6 +641,13 @@ def cmd_pairwise(a) -> None:
     base, new = load_run(a.base), load_run(a.new)
     items = {it["id"]: it for it in load_battery()}
     ids = [i for i in base if i in new]
+    tag = "ctx_" if a.context else ("frag_" if a.with_context else "")
+    prev_path = OUT / f"pairwise_{tag}{a.base}_vs_{a.new}.jsonl"
+    prev = {}
+    if getattr(a, "retry_errors", False) and prev_path.exists():
+        prev = {r["id"]: (r["id"], r["gana"], r["motivo"]) for r in map(json.loads, prev_path.read_text().splitlines())}
+        ids = [i for i in ids if prev.get(i, (None, "error"))[1] == "error"]
+        print(f"reintentando {len(ids)} comparaciones con error", file=sys.stderr)
 
     def one(i):
         b, n = base[i], new[i]
@@ -595,6 +663,7 @@ def cmd_pairwise(a) -> None:
         frags = _fragments_for_judge(b, n) if (a.with_context and not a.context) else ""
         prompt = PAIR_PROMPT.format(que=que, pregunta=it["pregunta"] if it else b.get("pregunta", ""),
                                     hechos=hechos, fragmentos=frags, etiqueta=etiqueta, x=x, y=y, criterio=crit)
+        last = ""
         for _ in range(3):
             try:
                 r = client.models.generate_content(model=a.judge_model, contents=prompt,
@@ -603,12 +672,16 @@ def cmd_pairwise(a) -> None:
                 m = v.get("mejor")
                 winner = "empate" if m == "empate" else ((a.new if m == "X" else a.base) if flip else (a.base if m == "X" else a.new))
                 return i, winner, v.get("motivo", "")
-            except Exception:                               # noqa: BLE001
+            except Exception as e:                          # noqa: BLE001
+                last = f"{type(e).__name__}: {str(e)[:200]}"
                 time.sleep(3)
-        return i, "error", ""
+        return i, "error", last
 
     with ThreadPoolExecutor(max_workers=a.workers) as ex:
         res = list(ex.map(one, ids))
+    if prev:                                                # --retry-errors: fusionar con lo anterior
+        done = {i: (i, w, m) for i, w, m in res}
+        res = [done.get(i, t) for i, t in prev.items()]
     from collections import Counter
     c = Counter(w for _, w, _ in res)
     by = defaultdict(Counter)
@@ -623,7 +696,6 @@ def cmd_pairwise(a) -> None:
         L.append(f"| {t} | {cc[a.new]} | {cc[a.base]} | {cc['empate']} |")
     L += ["", f"## Donde gana {a.base}", ""] + [f"- **{i}**: {m}" for i, w, m in res if w == a.base]
     text = "\n".join(L)
-    tag = "ctx_" if a.context else ("frag_" if a.with_context else "")
     out = OUT / f"pairwise_{tag}{a.base}_vs_{a.new}.md"
     out.write_text(text, encoding="utf-8")
     (OUT / f"pairwise_{tag}{a.base}_vs_{a.new}.jsonl").write_text(
@@ -688,6 +760,28 @@ def cmd_add_critical(a) -> None:
     print(f"{a.name}: criticos medio {mean([r['criticos'] for r in run.values()]):.2f}")
 
 
+def cmd_rescore(a) -> None:
+    """Recalcula las métricas deterministas (recuperación, hechos_ctx, criticos, cita_ok)
+    de una ejecución con lo que guardó: sin llamadas al modelo. Sirve para dar a
+    ejecuciones anteriores las métricas añadidas después."""
+    sys.path.insert(0, str(ROOT))
+    items = {it["id"]: it for it in load_battery()}
+    path = OUT / f"{a.name}.jsonl"
+    rows = [json.loads(l) for l in path.read_text(encoding="utf-8").splitlines() if l.strip()]
+    for r in rows:
+        it = items.get(r["id"])
+        docs = r.get("recuperados") or []
+        if it is None:
+            continue
+        r.update(score_retrieval(it, docs))
+        r["tokens_contexto"] = round(sum(len(d.get("content") or "") for d in docs) / 4.18)
+        if r.get("respuesta"):
+            r["criticos"] = critical_count(r["respuesta"], docs, it["pregunta"])
+            r.update(citation_precision(r["respuesta"], docs, it["pregunta"]))
+    path.write_text("".join(json.dumps(r, ensure_ascii=False) + "\n" for r in rows), encoding="utf-8")
+    print_summary(a.name, rows)
+
+
 def cmd_split_draft(a) -> None:
     """Convierte los BORRADORES de una ejecución con harness en una ejecución propia (lo que
     se habría servido sin la capa de reparación) para juzgarla con `rejudge`."""
@@ -722,6 +816,10 @@ def main() -> None:
     r.add_argument("--no-generate", action="store_true", help="solo recuperación")
     r.add_argument("--no-judge", action="store_true", help="generar sin juzgar (preguntas sin referencia)")
     r.add_argument("--graph", help="ruta al grafo normativo (activa la expansión por grafo)")
+    r.add_argument("--units", help="ruta al almacén de unidades (activa el contexto adaptativo)")
+    r.add_argument("--planner", action="store_true", help="activa el planificador de búsqueda")
+    r.add_argument("--max-level", default="L", choices=["S", "M", "L"], help="nivel de contexto máximo")
+    r.add_argument("--thinking", default="", help="presupuesto de razonamiento (vacío = dinámico)")
     r.add_argument("--queries", help="fichero de preguntas sin referencia (en vez de la batería)")
     r.add_argument("--sample", type=int, help="muestra aleatoria de N preguntas")
     r.add_argument("--seed", type=int, default=2026)
@@ -738,6 +836,7 @@ def main() -> None:
                     help="el juez ve los fragmentos que tuvieron delante las respuestas y juzga con ellos")
     pw.add_argument("--judge-model", default="gemini-3.1-pro-preview")
     pw.add_argument("--workers", type=int, default=6)
+    pw.add_argument("--retry-errors", action="store_true", help="repite solo las comparaciones que dieron error")
     rj = sub.add_parser("rejudge")
     rj.add_argument("name")
     rj.add_argument("--fragments-from", help="ejecución solo-búsqueda con los textos de los fragmentos")
@@ -750,9 +849,11 @@ def main() -> None:
     sd = sub.add_parser("split-draft")
     sd.add_argument("name")
     sd.add_argument("--out", required=True)
+    rs_ = sub.add_parser("rescore", help="recalcula las métricas deterministas sin llamar al modelo")
+    rs_.add_argument("name")
     a = ap.parse_args()
     {"run": cmd_run, "compare": cmd_compare, "pairwise": cmd_pairwise, "rejudge": cmd_rejudge,
-     "add-critical": cmd_add_critical, "split-draft": cmd_split_draft}[a.cmd](a)
+     "add-critical": cmd_add_critical, "split-draft": cmd_split_draft, "rescore": cmd_rescore}[a.cmd](a)
 
 
 if __name__ == "__main__":

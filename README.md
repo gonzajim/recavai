@@ -18,15 +18,18 @@ Navegador (widget de chat · panel de experto)
         ▼
 Cloud Run · Flask + Gunicorn (2 procesos × 8 hilos) · europe-west1
         │
-        ├── Agente asesor (src/agent)  habilidades · controles · harness
+        ├── Agente asesor (src/agent)  habilidades · controles · harness · contexto adaptativo
         ├── Gemini 2.5 Flash           generación y llamadas a herramientas
         ├── Pinecone recavai-corpus-v2 corpus troceado por unidad normativa + documentos del usuario
         ├── Grafo normativo            en memoria (data/normative_graph.json): referencias entre artículos
+        ├── Almacén de unidades        en memoria (data/unidades.json.gz): artículos completos para el contexto
         ├── Firestore                  hilos, progreso de auditoría, documentos
         └── BigQuery                   trazas de conversación
 ```
 
 Los *embeddings* se calculan dentro del contenedor con `intfloat/multilingual-e5-small` (384 dimensiones, 512 tokens), que va incluido en la imagen. El modelo, el índice y el umbral de similitud van siempre juntos: cambiar uno sin los otros rompe la búsqueda.
+
+La búsqueda localiza y el contexto se construye por **unidades completas** (artículo, requisito NEIS, contenido GRI) con un presupuesto según la pregunta: 6.000, 12.000 o 45.000 tokens ([docs/PLAN_CONTEXTO.md](docs/PLAN_CONTEXTO.md)).
 
 ## Documentación
 
@@ -38,6 +41,7 @@ Los *embeddings* se calculan dentro del contenedor con `intfloat/multilingual-e5
 | [docs/ARQUITECTURA_DATOS.md](docs/ARQUITECTURA_DATOS.md) | Estado medido del corpus, el índice, el modelo y el grafo |
 | [docs/RAG_V2_RESULTADOS.md](docs/RAG_V2_RESULTADOS.md) | Evaluación del cambio de índice, modelo y grafo |
 | [benchmarks/RESULTADOS_FIDELIDAD.md](benchmarks/RESULTADOS_FIDELIDAD.md) | Evaluación de la fidelidad (habilidades y controles) |
+| [docs/PLAN_CONTEXTO.md](docs/PLAN_CONTEXTO.md) · [benchmarks/RESULTADOS_CONTEXTO.md](benchmarks/RESULTADOS_CONTEXTO.md) | Contexto adaptativo: plan y evaluación |
 | [docs/DESARROLLO.md](docs/DESARROLLO.md) | Montar el entorno local y trabajar en el código |
 | [docs/DESPLIEGUE.md](docs/DESPLIEGUE.md) | Subir cambios al entorno vivo, con despliegue canario y vuelta atrás |
 | [docs/MIGRACION.md](docs/MIGRACION.md) | Plan de migración a los proyectos GCP definitivos |
@@ -66,7 +70,8 @@ Y en tres terminales:
 app.py                     rutas HTTP, autenticación, límites, endpoints de administración
 src/
   config.py                variables de entorno y clientes externos
-  agent/                   el asesor: skills/*.md (habilidades), guardrails.py, harness.py
+  agent/                   el asesor: skills/*.md (habilidades), guardrails.py, harness.py, planner.py
+  context_builder.py       contexto adaptativo: unidades completas, niveles S/M/L, orden de lectura
   gemini_service.py        turnos del auditor y sus herramientas; recuperación y contexto
   rag_service.py           embeddings, búsqueda en Pinecone, documentos del usuario
   normative_graph.py       grafo normativo en memoria (referencia explícita y expansión)
@@ -77,7 +82,7 @@ src/
   corpus_pipeline.py       indexación antigua (fuera del servicio)
   rag_benchmark.py         medición de calidad
   kb_experiment.py         experimento factorial de la línea de investigación
-data/                      grafo normativo y registro de normas (van en la imagen)
+data/                      grafo normativo, registro de normas y almacén de unidades (van en la imagen)
 benchmarks/                batería de evaluación v1 y resultados
 public/chatbot/            widget de chat
 public/admin-panel/        panel de experto (React)

@@ -66,8 +66,8 @@ Y si algo va mal:
 ### Qué probar en la URL canaria antes de promover
 
 1. `GET /health` responde.
-2. En los registros de arranque de la revisión: `Grafo normativo cargado`, `Pinecone index connected via 'recavai-corpus-v2'` y `SentenceTransformer 'intfloat/multilingual-e5-small' loaded`. El servicio carga las habilidades y el grafo al arrancar: si faltan, la instancia no arranca (mejor eso que fallar en la primera pregunta).
-3. Asesor: «¿Qué establece el artículo 10 de la CSDDD?» cita el artículo 10 con su página; «¿Qué dice la Ley 11/2018?» responde que no la tiene en la documentación.
+2. En los registros de arranque de la revisión: `Grafo normativo cargado`, `Almacén de unidades cargado: 381 unidades, 8127 fragmentos`, `Pinecone index connected via 'recavai-corpus-v2'` y `SentenceTransformer 'intfloat/multilingual-e5-small' loaded`. El servicio carga las habilidades, el grafo y el almacén al arrancar: si faltan las habilidades, la instancia no arranca; si el grafo o el almacén están activados y no cargan, sale un ERROR en el arranque y el servicio sigue sin ellos.
+3. Asesor: «¿Qué establece el artículo 10 de la CSDDD?» cita el artículo 10 con su página y lo recorre entero; «¿Qué dice la Ley 11/2018?» responde que no la tiene en la documentación. En el registro, cada turno lleva `"nivel"` y `"tokens_contexto"` (`./scripts/logs.sh agente`).
 4. Modo auditor: recorre las seis preguntas obligatorias del bloque 1 sin repetir ninguna.
 5. En el bloque 4, responder *«tenemos buzón ético pero solo para empleados»* debe producir un aviso de brecha con la norma (art. 14 de la CSDDD) y la recomendación.
 6. El bloque no se cierra mientras queden preguntas pendientes.
@@ -93,6 +93,24 @@ cambiara el índice en el secreto, **una vuelta atrás a una revisión anterior 
 
 Los dos índices tienen activada la protección contra borrado. El v1 se conserva para
 poder volver atrás.
+
+### Contexto adaptativo
+
+Desde el 24/09/2026 ([PLAN_CONTEXTO.md](PLAN_CONTEXTO.md)) cada revisión fija además
+cómo se construye el contexto. El almacén de unidades (`data/unidades.json.gz`) se generó
+desde el mismo índice v2 y comparte sus ids: **con el índice v1 hay que vaciar
+`_RAG_UNITS`**.
+
+| Sustitución | Variable | Valor | Para volver al comportamiento anterior |
+|---|---|---|---|
+| `_RAG_UNITS` | `RAG_UNIT_STORE` | `/app/data/unidades.json.gz` | vacío: un bloque por fragmento, 6 como máximo |
+| `_RAG_MAX_LEVEL` | `RAG_CONTEXT_MAX_LEVEL` | ver `cloudbuild.yaml` | `M` quita el nivel L y la segunda pasada |
+| `_RAG_THINKING` | `RAG_THINKING_BUDGET` | `0` | vacío: razonamiento dinámico (2-4 veces más lento con contexto grande) |
+| `_RAG_PLANNER` | `RAG_PLANNER` | `0` | — (no se ha activado nunca) |
+
+Se pueden cambiar sin reconstruir la imagen:
+`gcloud run services update orchestrator-dev --region europe-west1 --update-env-vars RAG_CONTEXT_MAX_LEVEL=M`
+(crea una revisión nueva con el 100 % del tráfico: hacerlo fuera de horas de uso).
 
 ### Capacidad
 
@@ -179,6 +197,10 @@ Los secretos se inyectan desde Secret Manager en el despliegue (`--update-secret
 | `RAG_MIN_SCORE` | Sustitución `_RAG_MIN_SCORE` | Umbral de similitud calibrado para el modelo (0,841 con e5-small) |
 | `RAG_NORMATIVE_GRAPH` | Sustitución `_RAG_GRAPH` | Ruta del grafo en la imagen; vacío lo desactiva |
 | `RAG_NORM_REGISTRY` | Opcional | Ruta alternativa del registro de normas (por defecto `data/normas_corpus.json`) |
+| `RAG_UNIT_STORE` | Sustitución `_RAG_UNITS` | Almacén de unidades del contexto adaptativo; vacío lo desactiva |
+| `RAG_CONTEXT_MAX_LEVEL` | Sustitución `_RAG_MAX_LEVEL` | Nivel de contexto máximo: `S`, `M` o `L` |
+| `RAG_THINKING_BUDGET` | Sustitución `_RAG_THINKING` | Razonamiento interno de Gemini; `0` lo quita, vacío = dinámico |
+| `RAG_PLANNER` | Sustitución `_RAG_PLANNER` | `1` activa el planificador de búsqueda |
 | `CORS_ORIGINS` | Opcional | Si falta, se usa la lista segura por defecto |
 
 `cloudbuild.yaml` retira el secreto `NEO4J_PASSWORD` de la revisión (`--remove-secrets`) y

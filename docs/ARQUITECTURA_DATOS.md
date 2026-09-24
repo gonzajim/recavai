@@ -28,6 +28,7 @@ con el modelo real y de resolver el DNS de la base de grafos.
 | Palabras partidas por guión blando | 1.065 fragmentos | **0** (se limpian al extraer) |
 | Grafo | Neo4j declarado, instancia inexistente | **en memoria**: 381 unidades, 408 referencias cruzadas, 24 modificaciones |
 | Ids de vector | globales (`chunk_000123`) | **por documento** (`01-csddd-069c7ea5-0037`) |
+| Contexto que recibe el modelo | 6 fragmentos (~1.800 tokens) | **unidades completas** según la pregunta: 6.000 / 12.000 / 45.000 tokens (desde el 24/09/2026) |
 
 **Fragmentos v2.** Palabras p25/mediana/p75/máx: 123 / 181 / 201 / 393; caracteres
 816 / 1.211 / 1.331 / 1.998; 1.262.211 palabras en total (más que el corpus porque cada
@@ -36,6 +37,19 @@ fragmento repite la última frase del anterior dentro de la misma unidad). Metad
 section, chunker` y, cuando aplica, `article` y `modifications`. Al vectorizar se
 antepone una cabecera de contexto («CSDDD … · Artículo 10 · Prevención de efectos
 adversos potenciales») que no se guarda en `text`: las citas son literales.
+
+**Almacén de unidades** (`data/unidades.json.gz`, 2,2 MB comprimido; 24/09/2026). Generado
+por `scripts/build_unit_store.py` desde el mismo `.npz` que se cargó en Pinecone: texto y
+posición de los 8.127 fragmentos, orden de cada uno de los 69 documentos y las 381
+unidades con sus ids (las mismas claves que los nodos del grafo; verificado: 381 de 381
+con idénticos ids). Tamaño de las unidades en tokens: mediana 1.600, p90 3.700, máximo
+16.800. Lo usa `src/context_builder.py` para ampliar cada fragmento recuperado a su unidad
+sin consultar Pinecone. **Hay que regenerarlo cada vez que se reconstruya el índice.**
+
+**Tamaño del corpus en tokens de Gemini** (`countTokens`, 24/09/2026): 1.904.245 tokens,
+1,58 por palabra, 4,18 caracteres por token. No cabe en la ventana de 1.048.576 tokens de
+ningún modelo Gemini en uso; el núcleo normativo (CSRD, CSDDD, NEIS, glosario y análisis)
+son 352.704.
 
 **Categorías.** Se conservaron las `primary_category` de v1 por documento
 (`data/categorias_v1.json`) para que la comparación midiera solo el troceado. Tienen

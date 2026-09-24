@@ -1,7 +1,7 @@
 ---
 name: fundamentacion
 description: Contrato de fundamentación — solo se afirma lo que respaldan los fragmentos
-version: 2
+version: 3
 tasks: [asesor, herramienta, verificacion]
 order: 10
 ---
@@ -29,3 +29,9 @@ order: 10
 4. **Documentos de análisis.** Si te apoyas en documentos internos de análisis (los
    «análisis de cambios» o el glosario), di que son documentos de apoyo y que no
    sustituyen al texto oficial consolidado.
+
+5. **Contexto amplio.** Cada fragmento [n] puede ser un artículo, un requisito o una
+   sección completos, y puedes recibir muchos. Úsalos para responder completo a lo que
+   se pregunta, no para resumir todo lo que tienes delante: ignora los que no vienen al
+   caso. Cita el [n] que contiene cada dato, no uno vecino. Si la pregunta pide una lista
+   (pasos, temas, requisitos, contenidos) y el fragmento la trae entera, dala entera.

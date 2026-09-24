@@ -188,13 +188,13 @@ class NormativeGraph:
             md = dict(getattr(v, "metadata", None) or {})
             if (md.get("source"), (md.get("text") or "")[:80]) in seen:
                 continue
-            scored.append((float(np.dot(q, np.asarray(v.values, dtype="float32"))), md))
+            scored.append((float(np.dot(q, np.asarray(v.values, dtype="float32"))), vid, md))
         scored.sort(key=lambda x: -x[0])
         return [{
-            "content": md.get("text", ""), "title": md.get("source", ""), "category": category,
+            "id": vid, "content": md.get("text", ""), "title": md.get("source", ""), "category": category,
             "score": sc, "page": md.get("page"), "total_pages": md.get("total_pages"),
             "page_end": md.get("page_end"), "article": md.get("article"), "unit_label": md.get("unit_label"),
-        } for sc, md in scored[:limit]]
+        } for sc, vid, md in scored[:limit]]
 
     def neighbours(self, source: str, unit: str) -> set[str]:
         return {k for k in self.out.get(f"{source}#{unit}", set()) if k not in self.hubs}

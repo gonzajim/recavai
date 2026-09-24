@@ -16,7 +16,8 @@ Markdown en `skills/` con una cabecera:
     (instrucciones)
 
 - `tasks`: en qué tareas se carga. Tareas: asesor (chat), herramienta (el auditor
-  consulta al asesor), verificacion (contraste de una respuesta con la normativa).
+  consulta al asesor), verificacion (contraste de una respuesta con la normativa) y
+  planificacion (el planificador de búsqueda, src/agent/planner.py).
 - `triggers`: si la habilidad los tiene, solo se carga cuando la consulta contiene
   alguno (divulgación progresiva: el modelo no recibe reglas de la CSRD para una
   pregunta de la guía OCDE de minerales). Si ninguna habilidad con disparadores encaja,
@@ -37,7 +38,7 @@ from functools import lru_cache
 from pathlib import Path
 
 SKILLS_DIR = Path(__file__).parent / "skills"
-TASKS = ("asesor", "herramienta", "verificacion")
+TASKS = ("asesor", "herramienta", "verificacion", "planificacion")
 
 
 @dataclass(frozen=True)

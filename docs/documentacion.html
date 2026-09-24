@@ -190,8 +190,9 @@
       <span class="fact"><b>Vectores</b> Pinecone · e5-small · 384d</span>
       <span class="fact"><b>Grafo</b> normativo, en memoria</span>
       <span class="fact"><b>Asesor</b> habilidades + controles</span>
+      <span class="fact"><b>Contexto</b> artículos completos · 6k–45k tokens</span>
       <span class="fact"><b>Región</b> europe-west1</span>
-      <span class="fact"><b>Revisión</b> 23 sep 2026</span>
+      <span class="fact"><b>Revisión</b> 24 sep 2026</span>
     </div>
   </header>
 
@@ -275,6 +276,7 @@
             <div class="tile accent"><b>gemini_service</b><span>auditor, herramientas, recuperación</span></div>
             <div class="tile accent"><b>rag_service</b><span>embeddings e5, búsqueda</span></div>
             <div class="tile accent"><b>normative_graph</b><span>grafo normativo en memoria</span></div>
+            <div class="tile accent"><b>context_builder</b><span>artículos completos por nivel</span></div>
             <div class="tile accent"><b>history / persistence</b><span>historial y trazas</span></div>
           </div>
         </div>
@@ -305,6 +307,8 @@
             <tr><td class="mono">src/agent/</td><td>El asesor: habilidades en Markdown compuestas por tarea (<code>skills/</code>), controles deterministas de entrada, contexto y salida (<code>guardrails.py</code>) y el bucle de cada turno (<code>harness.py</code>)</td><td><span class="chip c-prod">Producción</span></td></tr>
             <tr><td class="mono">src/gemini_service.py</td><td>Turno del auditor y bucle de herramientas; recuperación de fragmentos y construcción del mensaje con ellos</td><td><span class="chip c-prod">Producción</span></td></tr>
             <tr><td class="mono">src/rag_service.py</td><td>Embeddings (con los prefijos que exige e5), búsqueda en Pinecone, filtro por categoría, troceado de PDFs subidos</td><td><span class="chip c-prod">Producción</span></td></tr>
+            <tr><td class="mono">src/context_builder.py</td><td>Contexto adaptativo: amplía cada fragmento recuperado a su artículo o requisito completo desde un almacén local y llena el presupuesto del nivel de la pregunta (6.000, 12.000 o 45.000 tokens), en el orden del documento</td><td><span class="chip c-prod">Producción</span></td></tr>
+            <tr><td class="mono">src/agent/planner.py</td><td>Planificador de búsqueda: reformula la pregunta en el vocabulario de la norma. Probado el 24/09/2026 y no adoptado; queda desactivado</td><td><span class="chip c-res">Desactivado</span></td></tr>
             <tr><td class="mono">src/normative_graph.py</td><td>Grafo normativo en memoria: resuelve «artículo 9 de la CSDDD» y añade los artículos a los que remiten los fragmentos</td><td><span class="chip c-prod">Producción</span></td></tr>
             <tr><td class="mono">src/assistant_instructions.py</td><td>Prompt de sistema del auditor, con sus ocho bloques. El del asesor pasó a las habilidades</td><td><span class="chip c-prod">Producción</span></td></tr>
             <tr><td class="mono">src/history_service.py</td><td>Lee el historial de Firestore y lo convierte al formato que Gemini acepta, saneando la alternancia de turnos</td><td><span class="chip c-prod">Producción</span></td></tr>
@@ -335,6 +339,7 @@
       <p>Es el modo de consulta. El usuario pregunta, el sistema busca en el corpus y en los documentos que ese usuario haya subido, y responde. La respuesta lleva marcas <code>[1]</code>, <code>[2]</code>… que se corresponden con la lista de fragmentos que el backend devuelve en el campo <code>sources</code>, de modo que el usuario puede comprobar de dónde sale cada afirmación.</p>
       <p>Desde el 23/09/2026 el asesor tiene un contrato de fidelidad: <strong>cada dato normativo —cifra, plazo, umbral, artículo, número de norma u obligación— tiene que estar en un fragmento</strong>, y si no está, el asesor dice que no consta en la documentación en lugar de completarlo de memoria. El consejo práctico que no sale de la norma va aparte, en una sección rotulada «Orientación práctica (no extraída de la normativa)».</p>
       <p>Antes de servir cada respuesta, un control automático busca en ella cifras, fechas, artículos y números de norma que no aparezcan en los fragmentos. Si encuentra alguno, pide una reescritura; si aun así queda algo sin respaldo, la respuesta llega con una nota que dice qué dato no se ha podido verificar. Otro control avisa al modelo, antes de generar, cuando la pregunta nombra una ley que no está en el corpus o un artículo que no existe («artículo 52 de la CSDDD»). Con esto, las respuestas sin afirmaciones no respaldadas pasaron del 33 % al 90 %.</p>
+      <p>Desde el 24/09/2026 el asesor lee <strong>artículos completos</strong>, no trozos: cada fragmento que encuentra la búsqueda se amplía a su unidad entera, y la pregunta recibe más o menos texto según lo que pida (una definición, una lista completa, el panorama de una norma). Antes solo llegaba al modelo la mitad de los datos que hacían falta y las respuestas quedaban cortas, porque el asesor tiene prohibido completar de memoria; ahora llega el 83 %, la cobertura sube del 63 % al 81 % y las respuestas son más rápidas. Un control nuevo comprueba además que cada cifra esté en el fragmento que se cita, no en uno vecino.</p>
 
       <h3>Auditor</h3>
       <p>Es el modo de entrevista. El sistema conduce una auditoría preliminar en ocho bloques temáticos. En cada turno recibe, inyectado en su prompt, el estado de la auditoría: qué bloques están cerrados, cuál está activo y qué resúmenes se han generado. Dispone de dos herramientas que puede invocar por su cuenta:</p>
@@ -428,13 +433,13 @@
           <tbody>
             <tr><td class="mono">1</td><td>Documentos del usuario (su espacio propio en Pinecone)</td><td class="mono">top_k = 6 · score mínimo 0,25</td></tr>
             <tr><td class="mono">2</td><td>FAISS en memoria (ficheros efímeros, legado)</td><td class="mono">top_k = 6 · score mínimo 0,30</td></tr>
-            <tr><td class="mono">3</td><td>Corpus normativo global</td><td class="mono">12 candidatos → score mínimo 0,841 → 6 resultados</td></tr>
+            <tr><td class="mono">3</td><td>Corpus normativo global</td><td class="mono">30 candidatos → score mínimo 0,841 → unidades completas hasta el presupuesto del nivel</td></tr>
             <tr><td class="mono">4</td><td>Grafo normativo</td><td class="mono">≤ 3 por referencia explícita + ≤ 3 por remisión</td></tr>
           </tbody>
         </table>
       </div>
 
-      <p>El corpus global se consulta con un embudo: se piden doce candidatos, se descartan los que no llegan a 0,841 de similitud y se pasan como máximo seis al modelo. El umbral está calibrado con las preguntas reales de los usuarios para que quede sin contexto la misma proporción que con el modelo anterior (8,4 %): con e5 todas las similitudes caen entre 0,85 y 0,90, y el 0,55 de antes no filtraría nada. Los documentos del usuario aparecen siempre antes que el corpus, porque si alguien ha subido su propia política de sostenibilidad quiere que la respuesta hable de ella.</p>
+      <p>El corpus global se consulta con un embudo: se piden treinta candidatos y se descartan los que no llegan a 0,841 de similitud (hasta el 24/09/2026 se pedían doce y pasaban como máximo seis). El umbral está calibrado con las preguntas reales de los usuarios para que quede sin contexto la misma proporción que con el modelo anterior (8,4 %): con e5 todas las similitudes caen entre 0,85 y 0,90, y el 0,55 de antes no filtraría nada. Los documentos del usuario aparecen siempre antes que el corpus, porque si alguien ha subido su propia política de sostenibilidad quiere que la respuesta hable de ella.</p>
 
       <h3>Enrutado por tipo de pregunta</h3>
       <p>El sistema sigue clasificando la pregunta por las expresiones que contiene. Desde que se retiró Neo4j la clasificación solo se registra; el grafo normativo se aplica a todas las preguntas:</p>
@@ -457,8 +462,22 @@
       <h3>Filtro por categoría</h3>
       <p>Si la pregunta menciona términos propios de la CSDDD o de GRI, la búsqueda se restringe a esa categoría documental. Si el filtro devuelve cero resultados, se repite la búsqueda sin filtro: es preferible una respuesta con fuentes de otra categoría que ninguna respuesta.</p>
 
-      <h3>Presupuesto de contexto</h3>
-      <p>Los fragmentos se añaden mientras quepan en un presupuesto de <strong>180.000 caracteres</strong> para Gemini 2.5 Flash (540.000 si se usara Pro). Cada fragmento entra encabezado por su número, documento, unidad normativa («Artículo 10 · Prevención de efectos adversos potenciales»), categoría, páginas y relevancia, y el mensaje final se cierra con la pregunta original. La unidad es lo que permite al modelo citar el artículo aunque el número no aparezca en el texto del fragmento. Ese encabezado numerado es lo que permite al modelo citar <code>[1]</code>, <code>[2]</code> y a la interfaz enlazar cada cita con su fuente.</p>
+      <h3>Contexto adaptativo</h3>
+      <p>Recuperar sirve para <em>localizar</em>; lo que lee el modelo es la unidad entera. Cada candidato se amplía a su artículo, requisito NEIS o contenido GRI completo, tomado de un almacén local con el texto de todo el corpus (<code>data/unidades.json.gz</code>), sin otra consulta a Pinecone. Las unidades se añaden por orden de prioridad hasta el presupuesto del nivel, y se presentan agrupadas por documento y en el orden del texto.</p>
+
+      <div class="scroll">
+        <table>
+          <thead><tr><th class="mono">Nivel</th><th>Cuándo</th><th class="num">Tokens</th></tr></thead>
+          <tbody>
+            <tr><td class="mono">S</td><td>La pregunta nombra la unidad («artículo 10 de la CSDDD»); verificaciones del auditor</td><td class="num">6.000</td></tr>
+            <tr><td class="mono">M</td><td>Por defecto</td><td class="num">12.000</td></tr>
+            <tr><td class="mono">L</td><td>Listas completas («qué temas recoge GRI 14») y segunda pasada</td><td class="num">45.000</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <p>Si la respuesta dice que algo no consta y todavía hay margen de tiempo, se repite una vez con el nivel siguiente (en preguntas reales, el 10 % de las veces). El modelo genera <strong>sin razonamiento interno</strong>: con 12.000 tokens de contexto el razonamiento dinámico tardaba 10,4 s frente a 4,4 s sin él, y era lo que disparaba la latencia. El corpus entero (1,9 millones de tokens) no cabría en la ventana del modelo (1,05 millones); con esta estrategia se usa alrededor del 1 %, lo que hace falta.</p>
+      <p>Tope absoluto: <strong>400.000 caracteres</strong> para Gemini 2.5 Flash, como red de seguridad. Cada bloque entra encabezado por su número, documento, unidad normativa («Artículo 10 · Prevención de efectos adversos potenciales»), categoría, páginas y relevancia, y el mensaje final se cierra con la pregunta original. La unidad es lo que permite al modelo citar el artículo aunque el número no aparezca en el texto del fragmento. Ese encabezado numerado es lo que permite al modelo citar <code>[1]</code>, <code>[2]</code> y a la interfaz enlazar cada cita con su fuente.</p>
     </section>
 
     <!-- ================= 06 ================= -->
@@ -636,17 +655,18 @@
         <table>
           <thead><tr><th>Medida (batería de 60 preguntas)</th><th class="num">Antes</th><th class="num">Ahora</th></tr></thead>
           <tbody>
-            <tr><td>Pasaje de la respuesta entre los fragmentos recuperados</td><td class="num">35 %</td><td class="num">68 %</td></tr>
-            <tr><td>Página correcta</td><td class="num">3 %</td><td class="num">60 %</td></tr>
-            <tr><td>Respuestas sin afirmaciones no respaldadas</td><td class="num">17 %</td><td class="num">90 %</td></tr>
+            <tr><td>Pasaje de la respuesta entre los fragmentos recuperados</td><td class="num">35 %</td><td class="num">91 %</td></tr>
+            <tr><td>Datos clave de la respuesta que llegan al modelo</td><td class="num">—</td><td class="num">83 %</td></tr>
+            <tr><td>Datos clave cubiertos por la respuesta</td><td class="num">48 %</td><td class="num">81 %</td></tr>
+            <tr><td>Respuestas sin afirmaciones no respaldadas</td><td class="num">17 %</td><td class="num">95 %</td></tr>
             <tr><td>Cifras, fechas y artículos inventados por respuesta</td><td class="num">0,42</td><td class="num">0</td></tr>
             <tr><td>Trampas detectadas (artículo inexistente, término inventado, ley fuera del corpus)</td><td class="num">1 de 3</td><td class="num">3 de 3</td></tr>
-            <tr><td>Latencia típica / en los casos más lentos</td><td class="num">12 / 20 s</td><td class="num">8 / 15 s</td></tr>
+            <tr><td>Latencia típica / en los casos más lentos</td><td class="num">12 / 20 s</td><td class="num">6 / 12 s</td></tr>
           </tbody>
         </table>
       </div>
 
-      <p>Las respuestas las puntúa un modelo juez que no sabe qué versión evalúa, y además se comparan por parejas a ciegas. Con 40 preguntas reales de usuarios que no se usaron para diseñar nada, el juez prefirió la versión nueva en 36 casos y la anterior en 4.</p>
+      <p>«Antes» es la versión de agosto; «ahora», la del 24/09/2026, tras el índice v2, el agente con controles y el contexto adaptativo. Las respuestas las puntúa un modelo juez que no sabe qué versión evalúa, y además se comparan por parejas a ciegas viendo los fragmentos. Con 40 preguntas reales de usuarios que no se usaron para diseñar nada, el juez prefirió el agente frente a la versión anterior en 36 casos de 40 (23/09) y, después, el contexto adaptativo frente al agente en 29 casos, con 8 a favor del agente y 3 empates (24/09).</p>
 
       <div class="panel panel-note">
         <span class="panel-label">Lo que esta batería no es</span>
@@ -665,6 +685,12 @@
           <b>Errores sustantivos que ningún control detecta</b>
           <p>Los controles del asesor cazan cifras, fechas, artículos y normas sin respaldo, pero no una afirmación falsa sin ninguno de esos datos: en la batería, 3 de 60 respuestas contradicen un dato clave (por ejemplo, que habrá normas NEIS sectoriales obligatorias). Detectarlas exigiría verificar frase a frase con un segundo modelo.</p>
           <span class="debt-meta">src/agent/guardrails.py · capa 4 no implantada</span>
+        </div></div>
+
+        <div class="debt-item"><div class="sev sev-md"></div><div class="debt-body">
+          <b>Las preguntas coloquiales siguen siendo las más flojas</b>
+          <p>Cuando el usuario pregunta con sus palabras («¿puedo cortar con un proveedor?») y la norma usa otras («suspensión o terminación de la relación comercial»), la búsqueda falla: la cobertura de estas preguntas solo subió del 47 % al 56 %. Un planificador que reformula la pregunta las mejoraba mucho, pero empeoraba las definiciones y los cambios normativos, y no pasó la regla de adopción.</p>
+          <span class="debt-meta">src/agent/planner.py · desactivado</span>
         </div></div>
 
         <div class="debt-item"><div class="sev sev-md"></div><div class="debt-body">
@@ -689,6 +715,18 @@
           <b>La revisión se da por lista antes de que la aplicación cargue</b>
           <p>Cloud Run considera lista la instancia en cuanto el servidor abre el puerto, antes de que Python termine de importar. Sin tráfico, la CPU se estrangula y el primer usuario espera unos 40 segundos. Una sonda de arranque contra <code>/health</code> lo evitaría.</p>
           <span class="debt-meta">Dockerfile · Cloud Run</span>
+        </div></div>
+
+        <div class="debt-item"><div class="sev sev-lo"></div><div class="debt-body">
+          <b>El almacén de unidades depende del índice</b>
+          <p>El texto con el que se amplían los fragmentos sale del mismo fichero que se cargó en Pinecone. Si se reconstruye el índice sin regenerar el almacén, la ampliación usaría texto viejo, o dejaría sin ampliar los fragmentos nuevos sin avisar.</p>
+          <span class="debt-meta">scripts/build_unit_store.py · data/unidades.json.gz</span>
+        </div></div>
+
+        <div class="debt-item"><div class="sev sev-lo"></div><div class="debt-body">
+          <b>Los PDF del usuario no se amplían</b>
+          <p>Para el corpus se leen artículos completos; para los documentos que sube el usuario siguen llegando como mucho seis trozos de 250 palabras.</p>
+          <span class="debt-meta">src/context_builder.py · src/rag_service.py</span>
         </div></div>
 
         <div class="debt-item"><div class="sev sev-lo"></div><div class="debt-body">
@@ -722,6 +760,12 @@
         </div></div>
 
         <div class="debt-item"><div class="sev sev-ok"></div><div class="debt-body">
+          <b>Resuelto el 24/09/2026 · Respuestas cortas por falta de contexto</b>
+          <p>El modelo recibía seis trozos (unos 1.800 tokens) y solo la mitad de los datos que hacían falta; las listas y los artículos largos quedaban a medias. Ahora lee unidades completas según la pregunta: cobertura del 63 % al 81 %, con menos latencia.</p>
+          <span class="debt-meta">src/context_builder.py · data/unidades.json.gz</span>
+        </div></div>
+
+        <div class="debt-item"><div class="sev sev-ok"></div><div class="debt-body">
           <b>Resuelto el 23/09/2026 · Índice, modelo y grafo</b>
           <p>Modelo inglés que descartaba el 41 % del texto, 64 % de páginas erróneas, palabras partidas por guiones de EUR-Lex, índice imposible de reproducir y grafo Neo4j inexistente: todo sustituido por el índice v2, el troceado por unidad normativa y el grafo en memoria.</p>
           <span class="debt-meta">recavai-corpus-v2 · src/chunking_v2.py · src/normative_graph.py</span>
@@ -736,7 +780,7 @@
     </section>
 
     <footer>
-      Documentación generada a partir del código de la rama de trabajo el 19 de septiembre de 2026 y actualizada el 23 de septiembre de 2026. Las cifras del corpus, de los índices y de la evaluación proceden de mediciones, no de estimaciones. La especificación equivalente en formato legible por máquina, para desarrollo dirigido por especificación, está en <code>docs/SPEC.md</code>.
+      Documentación generada a partir del código de la rama de trabajo el 19 de septiembre de 2026 y actualizada el 24 de septiembre de 2026. Las cifras del corpus, de los índices y de la evaluación proceden de mediciones, no de estimaciones. La especificación equivalente en formato legible por máquina, para desarrollo dirigido por especificación, está en <code>docs/SPEC.md</code>.
     </footer>
 
   </main>

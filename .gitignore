@@ -27,3 +27,6 @@ firestore-debug.log
 # Se regeneran con la consulta de docs/RAG_V2_RESULTADOS.md.
 data/real_queries.jsonl
 data/real_queries_holdout40.jsonl
+
+# Almacén de unidades sin comprimir (se versiona data/unidades.json.gz)
+data/unidades.json

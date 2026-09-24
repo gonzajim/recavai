@@ -11,7 +11,12 @@ Controles (guardrails) del asesor, en tres puntos del turno.
             · DatosCriticos: cifras, fechas, años, artículos, números de norma y códigos
               de requisito que no aparecen ni en los fragmentos ni en la pregunta.
             · CitasInexistentes: citas [n] a fragmentos que el modelo no ha recibido.
-            Producen VIOLACIONES, que el harness intenta reparar una vez.
+            · CitaSinRespaldo: un dato crítico que está en la base documental, pero en un
+              fragmento distinto del que cita la frase (contexto adaptativo: con artículos
+              enteros delante, hay más texto donde encontrar una cifra por casualidad).
+            Producen VIOLACIONES, que el harness intenta reparar una vez. Solo las dos
+            primeras se anotan en la respuesta si persisten: una cita a un fragmento
+            vecino es un error de precisión, no un dato sin respaldo.
 
 Todo es determinista: expresiones regulares y comparación de valores normalizados, sin
 un segundo modelo. Por eso es barato (milisegundos), reproducible y explicable: cada
@@ -22,8 +27,8 @@ documentar…»). Para eso haría falta verificar frase a frase con un modelo (c
 
 Criterio de respaldo: un dato está respaldado si aparece en CUALQUIERA de los
 fragmentos que llegaron al modelo o en la pregunta (el usuario puede dar sus propias
-cifras). No se exige que esté en el fragmento concreto que la frase cita: sería más
-estricto, pero con muchas falsas alarmas por citas imprecisas. Los números de norma se
+cifras). Que esté en el fragmento concreto que cita la frase lo comprueba aparte
+CitaSinRespaldo, solo en los tramos que terminan en una cita [n]. Los números de norma se
 aceptan también si figuran en cualquier documento del corpus (registro
 data/normas_corpus.json): así se admite «Directiva 2013/34/UE» aunque no haya salido en
 esta consulta, pero se detecta una «Directiva 2024/1109» que no existe en el corpus.
@@ -49,6 +54,7 @@ class Finding:
     kind: str                  # aviso | violacion
     detail: str                # texto para el modelo (aviso) o para el registro
     items: list[str] = field(default_factory=list)
+    annotate: bool = True      # si persiste tras reparar, se avisa al usuario
 
     def as_dict(self) -> dict:
         return {"guard": self.guard, "stage": self.stage, "kind": self.kind,
@@ -285,24 +291,132 @@ class DatosCriticos:
                         "Datos que no aparecen en los fragmentos ni en la pregunta", bad)]
 
 
+_CITE_GROUP = re.compile(r"(?:\[\d{1,3}(?:\s*[,;–-]\s*\d{1,3})*\]\s*)+")
+
+
+def _cite_numbers(group: str) -> set[int]:
+    """[2], [2, 5], [2][3], [2-4] → números citados (los intervalos se expanden)."""
+    out: set[int] = set()
+    for inner in re.findall(r"\[([^\]]*)\]", group):
+        for a, b in re.findall(r"(\d{1,3})\s*[–-]\s*(\d{1,3})", inner):
+            if 0 < int(b) - int(a) <= 20:
+                out |= set(range(int(a), int(b) + 1))
+        out |= {int(x) for x in re.findall(r"\d{1,3}", inner)}
+    return out
+
+
+def cited_indices(text: str) -> set[int]:
+    out: set[int] = set()
+    for m in _CITE_GROUP.finditer(text or ""):
+        out |= _cite_numbers(m.group(0))
+    return out
+
+
+def cited_segments(answer: str) -> list[tuple[str, set[int]]]:
+    """Tramos de la respuesta que terminan en una cita: dentro de cada línea, el texto
+    entre una cita (o el principio) y la siguiente."""
+    out = []
+    for line in (answer or "").split("\n"):
+        pos = 0
+        for m in _CITE_GROUP.finditer(line):
+            out.append((line[pos:m.start()], _cite_numbers(m.group(0))))
+            pos = m.end()
+    return out
+
+
+def _doc_evidence(d: dict) -> Evidence:
+    from src.doc_titles import doc_title
+    src = d.get("title") or ""
+    return build_evidence([src, doc_title(src) if src else "", d.get("unit_label") or "", d.get("content") or ""])
+
+
+def _supported(cd: CriticalData, ev: Evidence) -> dict[str, bool]:
+    """Para cada dato del tramo (salvo números de norma), si la evidencia lo respalda."""
+    out = {}
+    for v, txt in cd.quantities.items():
+        if v == v:
+            out[txt] = v in ev.values
+    for k, txt in cd.dates.items():
+        if k:
+            out[txt] = k in ev.dates
+    for y, txt in cd.years.items():
+        out[txt] = y in ev.years
+    for a, txt in cd.articles.items():
+        out[txt] = a in ev.articles
+    for c, txt in cd.codes.items():
+        out[txt] = c in ev.codes
+    return out
+
+
+def citation_check(answer: str, used_docs: list[dict], question: str = "") -> dict:
+    """Datos críticos de los tramos citados: cuántos respalda el fragmento citado y cuáles
+    están en OTRO fragmento. Los que no están en ninguno los cuenta DatosCriticos."""
+    by_index = {d.get("index"): d for d in used_docs}
+    ev_cache: dict[int, Evidence] = {}
+    q_ev = build_evidence([question])
+    ok, wrong = 0, []
+    for seg, nums in cited_segments(answer):
+        cd = extract_critical(seg)
+        valid = [n for n in nums if n in by_index]
+        if not valid:
+            continue
+        cited_sup = [_supported(cd, ev_cache.setdefault(n, _doc_evidence(by_index[n]))) for n in valid]
+        for txt, in_question in _supported(cd, q_ev).items():
+            if in_question:
+                continue                                  # lo da la pregunta
+            if any(s.get(txt) for s in cited_sup):
+                ok += 1
+                continue
+            elsewhere = [i for i, d in by_index.items() if i not in valid
+                         and _supported(cd, ev_cache.setdefault(i, _doc_evidence(d))).get(txt)]
+            if elsewhere:
+                wrong.append(f"«{txt}» citado en [{', '.join(map(str, sorted(valid)))}], "
+                             f"pero consta en [{', '.join(map(str, sorted(elsewhere)[:3]))}]")
+    return {"ok": ok, "wrong": list(dict.fromkeys(wrong))}
+
+
 class CitasInexistentes:
     name, stage = "citas_inexistentes", "salida"
 
     def check(self, state: TurnState) -> list[Finding]:
         valid = {d.get("index") for d in state.used_docs}
-        cited = set()
-        for grp in re.findall(r"\[(\d{1,3}(?:\s*[,;–-]\s*\d{1,3})*)\]", state.answer):
-            cited |= {int(x) for x in re.findall(r"\d+", grp)}
-        bad = sorted(c for c in cited if c not in valid)
+        bad = sorted(c for c in cited_indices(state.answer) if c not in valid)
         if not bad:
             return []
         return [Finding(self.name, self.stage, "violacion",
                         "Citas a fragmentos que no existen", [f"[{b}]" for b in bad])]
 
 
+class CitaSinRespaldo:
+    name, stage = "cita_sin_respaldo", "salida"
+
+    def check(self, state: TurnState) -> list[Finding]:
+        wrong = citation_check(state.answer, state.used_docs, state.question)["wrong"]
+        if not wrong:
+            return []
+        return [Finding(self.name, self.stage, "violacion",
+                        "Datos citados en un fragmento que no los contiene", wrong, annotate=False)]
+
+
+# Abstención: el modelo dice que la base documental no trae lo que se pregunta. El harness
+# la usa para decidir una segunda pasada con más contexto (Self-Route, Li et al., 2024).
+_ABSTAIN = re.compile(
+    r"(?:base documental|fragmentos?|documentaci[óo]n proporcionada|textos? proporcionados?)[^.\n]{0,60}?"
+    r"\bno\s+(?:se\s+)?(?:especifica|detalla|contiene|consta|recoge|incluye|menciona|precisa|aborda|desarrolla|"
+    r"proporciona|permite|dispone|encuentra)|"
+    r"\bno\s+(?:se\s+)?(?:especifica|detalla|consta|recoge|precisa|menciona|desarrolla)n?\b[^.\n]{0,80}?"
+    r"(?:base documental|fragmentos?|documentaci[óo]n proporcionada)|"
+    r"\bno\s+consta\b|no se ha recuperado ning[úu]n fragmento", re.I)
+
+
+def abstentions(text: str) -> int:
+    """Frases en las que la respuesta dice que algo no consta en la base documental."""
+    return len(_ABSTAIN.findall(text or ""))
+
+
 INPUT_GUARDS = (ReferenciaDesconocida(),)
 CONTEXT_GUARDS = (ContextoVacio(),)
-OUTPUT_GUARDS = (DatosCriticos(), CitasInexistentes())
+OUTPUT_GUARDS = (DatosCriticos(), CitasInexistentes(), CitaSinRespaldo())
 
 
 def run(guards, state: TurnState) -> list[Finding]:

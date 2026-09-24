@@ -69,6 +69,7 @@ COPY --chown=appuser:appgroup app.py ./
 COPY --chown=appuser:appgroup src/ ./src/
 COPY --chown=appuser:appgroup data/normative_graph.json ./data/normative_graph.json
 COPY --chown=appuser:appgroup data/normas_corpus.json ./data/normas_corpus.json
+COPY --chown=appuser:appgroup data/unidades.json.gz ./data/unidades.json.gz
 
 USER appuser
 

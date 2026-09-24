@@ -21,11 +21,14 @@ from src.bigquery_service import (
 from src import audit_catalog
 
 # Fallar al ARRANCAR, no en la primera pregunta de un usuario, si faltan las habilidades
-# del asesor o el grafo activado no carga (src/agent, src/normative_graph).
+# del asesor; cargar al arrancar el grafo y el almacén de unidades (si están activados y no
+# cargan, ERROR en el registro de arranque).
 from src.agent.skills import load_skills as _load_skills
 from src.normative_graph import get_graph as _get_graph
+from src.context_builder import get_unit_store as _get_unit_store
 _load_skills()
 _get_graph()
+_get_unit_store()
 
 # --- Firebase Admin / Firestore ---
 import firebase_admin

@@ -78,7 +78,7 @@ al 23/09/2026 apunta al índice v1 con MiniLM: funciona, pero no es lo que corre
 Ejecuta, **sin red, sin claves y sin Firestore**:
 
 - [`scripts/test_auditor.py`](../scripts/test_auditor.py) — 46 comprobaciones del auditor (doble de Firestore en memoria y asesor simulado): que un bloque no pueda cerrarse a medias, que las preguntas de perfil no consulten al asesor y las evaluables sí, que un fallo del asesor no impida registrar la respuesta, que el bloque activo siga a donde se está trabajando y que el verificador busque con la sustancia de la respuesta, no con sus instrucciones.
-- [`scripts/test_agent.py`](../scripts/test_agent.py) — 47 comprobaciones del agente asesor: carga y composición de las habilidades, cada control (datos críticos, citas inexistentes, normas y artículos inexistentes, contexto vacío) y el bucle del harness con un modelo simulado (reparación que funciona, reparación que no, nota final).
+- [`scripts/test_agent.py`](../scripts/test_agent.py) — 91 comprobaciones del agente asesor: carga y composición de las habilidades, cada control (datos críticos, citas inexistentes, citas al fragmento equivocado, normas y artículos inexistentes, contexto vacío, abstención) y el bucle del harness con un modelo simulado (reparación que funciona, reparación que no, nota final); el contexto adaptativo (ampliación a la unidad, ventana de vecinos, presupuesto por nivel, orden de lectura, segunda pasada, fuentes citadas) y el planificador.
 
 Ejecútalo antes de cada despliegue. Tarda unos segundos.
 

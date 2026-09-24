@@ -32,6 +32,9 @@ temp.js
 test_api.ps1
 test.orchestrator.http
 
-# Datos de evaluación que no forman parte de la imagen
-data/real_queries.jsonl
+# Datos de evaluación que no forman parte de la imagen. Las preguntas reales son datos de
+# usuarios: no deben salir de la máquina local.
+data/real_queries*.jsonl
 data/categorias_v1.json
+# Texto extraído del corpus e índices en memoria (~155 MB)
+.cache/

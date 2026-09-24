@@ -65,7 +65,7 @@ steps:
           --allow-unauthenticated --port 8080 \
           --update-secrets=GEMINI_API_KEY=GEMINI_API_KEY:latest,PINECONE_API_KEY=PINECONE_API_KEY:latest,PINECONE_INDEX_NAME=PINECONE_INDEX_NAME:latest,BIGQUERY_DATASET_ID=BIGQUERY_DATASET_ID:latest,BIGQUERY_TABLE_ID=BIGQUERY_TABLE_ID:latest \
           --remove-secrets=NEO4J_PASSWORD \
-          --set-env-vars=EMBEDDING_MODEL_NAME=${_EMBEDDING_MODEL},RAG_INDEX_NAME=${_RAG_INDEX},RAG_MIN_SCORE=${_RAG_MIN_SCORE},RAG_NORMATIVE_GRAPH=${_RAG_GRAPH} \
+          --set-env-vars=EMBEDDING_MODEL_NAME=${_EMBEDDING_MODEL},RAG_INDEX_NAME=${_RAG_INDEX},RAG_MIN_SCORE=${_RAG_MIN_SCORE},RAG_NORMATIVE_GRAPH=${_RAG_GRAPH},RAG_UNIT_STORE=${_RAG_UNITS},RAG_CONTEXT_MAX_LEVEL=${_RAG_MAX_LEVEL},RAG_THINKING_BUDGET=${_RAG_THINKING},RAG_PLANNER=${_RAG_PLANNER} \
           --timeout=600s --concurrency=16 --cpu=2 --memory=4Gi \
           $$TRAFFIC_ARGS
         if [ "${_TRAFFIC}" != "latest" ]; then
@@ -143,6 +143,14 @@ substitutions:
   _RAG_MIN_SCORE: '0.841'
   # Ruta del grafo normativo dentro de la imagen; vacío = desactivado.
   _RAG_GRAPH: '/app/data/normative_graph.json'
+  # Contexto adaptativo (docs/PLAN_CONTEXTO.md). Almacén de unidades: vacío = un bloque por
+  # fragmento, como antes. Nivel máximo S | M | L (M quita el nivel L y la segunda pasada).
+  # Razonamiento: 0 = sin razonamiento interno; vacío = dinámico (el de antes, 2-4 veces más lento).
+  # Planificador: 0 = desactivado (no pasó la regla de adopción el 24/09/2026).
+  _RAG_UNITS: '/app/data/unidades.json.gz'
+  _RAG_MAX_LEVEL: 'L'
+  _RAG_THINKING: '0'
+  _RAG_PLANNER: '0'
 
 images:
   - 'europe-west1-docker.pkg.dev/${PROJECT_ID}/cloud-run-source-deploy/${_SERVICE_NAME}:latest'

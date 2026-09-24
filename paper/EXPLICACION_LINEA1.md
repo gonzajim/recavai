@@ -172,3 +172,31 @@ que no se sostuvo. Ya están en la introducción del borrador.
 respuestas sin afirmaciones no respaldadas) viene de las habilidades y los controles de
 generación, no de la base de conocimiento. Encaja mejor en la línea de explicabilidad y
 benchmark que en esta.
+
+## Novedades del 24/09/2026: el contexto era el techo
+
+**Qué cambió.** El asesor ya no recibe los 6 fragmentos más parecidos, sino las unidades
+normativas completas a las que pertenecen los fragmentos recuperados (artículo, requisito
+NEIS, contenido GRI), con un presupuesto de 6.000, 12.000 o 45.000 tokens según la
+pregunta (`docs/PLAN_CONTEXTO.md`).
+
+**Evidencia de desarrollo (no confirmatoria, misma batería).** Con la misma búsqueda, los
+hechos clave que llegan al modelo pasan del 58 % al 83 % y la cobertura de las respuestas
+del 63 % al 81 %. La simulación previa mostró que ampliar 12 fragmentos a su unidad
+completa rinde casi lo mismo que recuperar 50 fragmentos sueltos. Para el artículo esto
+sugiere que **la unidad normativa no es solo una decisión de troceado (H1.1), sino
+también de lectura**: se puede indexar por fragmentos pequeños y servir unidades enteras
+(el patrón *small-to-big*). Si quieres incorporarlo, sería una condición más del
+experimento o una sección de discusión, no un resultado de §6.
+
+**RAG frente a contexto largo, con cifras propias.** El corpus ocupa 1,9 millones de
+tokens y la ventana de los modelos Gemini en uso es de 1,05 millones: inyectarlo entero no
+es posible, y el núcleo normativo (353.000 tokens) costaría unas 30 veces más por pregunta
+y dejaría sin sentido la verificación de citas. Es un argumento medido para la
+introducción o la discusión.
+
+**Lo que no funcionó.** Un planificador que reformula la pregunta en el vocabulario de la
+norma subía mucho las preguntas coloquiales (54 % → 88 % de hechos en contexto) pero
+bajaba las definiciones y los cambios normativos. Confirma que el desajuste de
+vocabulario usuario-norma es el fallo principal que queda, y que reformular no es gratis:
+relevante para la condición de paráfrasis (T9) del golden set.

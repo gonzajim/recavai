@@ -89,6 +89,13 @@ case "$ACTION" in
     ann=$(printf '%s\n' "$rows" | grep -c '"anotada": true' || true)
     avi=$(printf '%s\n' "$rows" | grep -c '"avisos": \[\"' || true)
     printf '  turnos %s · con avisos %s · reparados %s · anotados %s\n' "$total" "$avi" "$rep" "$ann"
+    # Contexto adaptativo (docs/PLAN_CONTEXTO.md): nivel S/M/L, segunda pasada (se espera
+    # un 10-15 %) y tokens de contexto.
+    sec=$(printf '%s\n' "$rows" | grep -c '"segunda_pasada": true' || true)
+    lv=$(printf '%s\n' "$rows" | grep -o '"nivel": "[SML]"' | sort | uniq -c | awk '{printf "%s %s  ", $3, $1}' | tr -d '"')
+    ctx=$(printf '%s\n' "$rows" | grep -o '"tokens_contexto": [0-9]*' | awk '{print $2}' | sort -n \
+          | awk '{a[NR]=$1} END {if (NR) printf "mediana %d · p95 %d", a[int((NR+1)/2)], a[int(NR*0.95)>0?int(NR*0.95):1]}')
+    printf '  niveles: %s· segunda pasada %s · tokens de contexto %s\n' "${lv:-—  }" "$sec" "${ctx:-—}"
     printf '%s\n' "$rows" | grep -E '"reparada": true|"anotada": true' | cut -c1-400 | head -20
     ;;
 

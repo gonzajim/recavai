@@ -40,3 +40,9 @@ storage.rules
 # …salvo las habilidades del agente, que son instrucciones de runtime (src/agent/skills).
 !src/agent/skills/*.md
 docs/
+
+# Datos locales de evaluación: texto del corpus, índices en memoria, resultados y
+# preguntas reales de usuarios. No forman parte de la imagen.
+.cache/
+results/
+data/real_queries*.jsonl

@@ -35,16 +35,23 @@ harness del asesor) y la puntúa.
 
 | Familia | Métricas |
 |---|---|
-| Búsqueda (determinista) | `doc@6`, `pasaje@6` (algún fragmento contiene el pasaje del dato clave), `pag@6`, `mrr`, `fuentes` |
+| Búsqueda (determinista) | `hechos_ctx` (fracción de datos clave cuyo pasaje llegó al modelo: el techo de la cobertura), `doc@6`, `pasaje@6` (algún fragmento contiene el pasaje del dato clave), `pag@6`, `mrr`, `fuentes`, `tokens_contexto` |
 | Respuesta (juez LLM, a ciegas) | `cobertura` de datos clave, `fiel` (sin afirmaciones no respaldadas), `rechazo_ok` en trampas, `veredicto_ok` en el auditor, `cita_unidad` (menciona el artículo esperado) |
-| Fidelidad (determinista) | `criticos`: cifras, fechas, artículos, normas y códigos sin respaldo en los fragmentos |
-| Funcionamiento | `ms_total`, `ms_busqueda`, errores |
+| Fidelidad (determinista) | `criticos`: cifras, fechas, artículos, normas y códigos sin respaldo en los fragmentos; `cita_ok`: de los datos de tramos citados, fracción que está en el fragmento que se cita |
+| Funcionamiento | `ms_total`, `ms_busqueda`, errores; con harness, `nivel` y `plan` por pregunta |
+
+Con el contexto adaptativo los «fragmentos» son bloques (unidades enteras, en el orden del
+documento): `mrr` y `pag@6` pierden sentido, porque el orden ya no es el de la similitud.
+Para la búsqueda, mirar `hechos_ctx` y `pasaje@6`.
 
 ```bash
-# Configuración actual (índice v2 + grafo + agente)
+# Configuración actual (índice v2 + grafo + agente + contexto adaptativo)
 python scripts/eval_battery.py run --name X --index recavai-corpus-v2 \
     --model intfloat/multilingual-e5-small --min-score 0.841 \
-    --graph data/normative_graph.json --judge-model gemini-3.5-flash
+    --graph data/normative_graph.json --judge-model gemini-3.5-flash \
+    --units data/unidades.json.gz --max-level L --thinking 0    # como cloudbuild.yaml
+#   --planner          activa el planificador de búsqueda (desactivado en producción)
+#   sin --units        un bloque por fragmento, como H4
 
 python scripts/eval_battery.py compare H4 X                          # IC por bootstrap pareado
 python scripts/eval_battery.py pairwise H4 X --with-context \        # juez a ciegas que ve los fragmentos
@@ -58,7 +65,14 @@ python scripts/eval_battery.py run ... --no-generate                  # solo bú
 python scripts/eval_battery.py rejudge X --judge-model M --out X.jM   # otro juez, mismas respuestas
 python scripts/eval_battery.py split-draft X --out X.borrador         # borradores del harness (antes de reparar)
 python scripts/eval_battery.py add-critical X [--fragments-from Y]    # métrica `criticos` sin llamadas
+python scripts/eval_battery.py rescore X                              # recalcula hechos_ctx, criticos, cita_ok sin llamadas
+
+# Latencia según tamaño de contexto y razonamiento (~40 llamadas, ~0,3 $)
+python scripts/probe_latency.py --out results/contexto/latencia.jsonl
 ```
+
+La ejecución se abandona al primer error 402 (crédito agotado) para no seguir gastando
+el crédito que comparte producción.
 
 **Reglas de uso**, aprendidas el 23/09/2026:
 
@@ -73,9 +87,14 @@ python scripts/eval_battery.py add-critical X [--fragments-from Y]    # métrica
   juicios. La clave local gasta del mismo crédito que producción (`docs/DESPLIEGUE.md` §5.1).
   `gemini-3.1-pro-preview` admite solo 250 peticiones al día.
 
+- **El juez ve de cada fragmento hasta 80.000 caracteres** (`JUDGE_FRAGMENT_CHARS`). Antes
+  lo cortaba a 1.500-2.000, y con artículos enteros hacía pasar por inventados datos que
+  el modelo sí tenía delante. Cambio de instrumento del 24/09/2026; no altera H4.
+
 Resultados guardados: `results/rag_v2/` (fuera del repositorio). Informes:
-[../docs/RAG_V2_RESULTADOS.md](../docs/RAG_V2_RESULTADOS.md) (índice, modelo, grafo) y
-[RESULTADOS_FIDELIDAD.md](RESULTADOS_FIDELIDAD.md) (habilidades y controles).
+[../docs/RAG_V2_RESULTADOS.md](../docs/RAG_V2_RESULTADOS.md) (índice, modelo, grafo),
+[RESULTADOS_FIDELIDAD.md](RESULTADOS_FIDELIDAD.md) (habilidades y controles) y
+[RESULTADOS_CONTEXTO.md](RESULTADOS_CONTEXTO.md) (contexto adaptativo).
 
 ## Instrumento anterior: `src/rag_benchmark.py` (10 preguntas de arranque)
 

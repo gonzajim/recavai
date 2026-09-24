@@ -8,6 +8,8 @@ from google.cloud.firestore_v1 import SERVER_TIMESTAMP
 from src.config import logger
 from src.assistant_instructions import AUDITOR_SYSTEM_PROMPT
 from src import audit_catalog
+from concurrent.futures import ThreadPoolExecutor
+
 from src.rag_service import (
     generate_embedding,
     search_documents,
@@ -29,12 +31,18 @@ _MAX_OUTPUT_TOKENS = 8192
 # Fragmentos extra que puede aportar el grafo normativo por consulta (src/normative_graph.py).
 _GRAPH_EXPAND = 3
 
-# Context window budget per model (chars, with 0.90 safety factor applied)
+# Tope absoluto de contexto por modelo, en caracteres. El límite real lo pone el nivel de
+# contexto (src/context_builder.py: 6.000 / 12.000 / 45.000 tokens); esto es la red de
+# seguridad. 400.000 caracteres son unos 95.000 tokens, el 9 % de la ventana de Flash.
 _CONTEXT_BUDGET: dict[str, int] = {
-    "gemini-2.5-flash":      180_000,
-    "gemini-2.5-flash-lite": 180_000,
+    "gemini-2.5-flash":      400_000,
+    "gemini-2.5-flash-lite": 400_000,
     "gemini-2.5-pro":        540_000,
 }
+
+# Búsquedas del planificador en paralelo (src/agent/planner.py)
+_SEARCH_POOL = ThreadPoolExecutor(max_workers=8, thread_name_prefix="search")
+_RRF_K = 60
 
 # ---------------------------------------------------------------------------
 # Tool declarations for the auditor
@@ -631,6 +639,25 @@ def _next_block_id(firestore_db, thread_id: str, after: str) -> str | None:
     return None
 
 
+def _doc_key(d: dict):
+    return d.get("id") or (d.get("title"), (d.get("content") or "")[:80])
+
+
+def rrf_merge(lists: list[list[dict]], k: int = _RRF_K, weights: list[float] | None = None) -> list[dict]:
+    """Fusión por rango recíproco: ordena por la suma de w/(k + posición) en cada lista.
+    Conserva de cada fragmento la mayor similitud, que es la que ve el modelo."""
+    score: dict = {}
+    best: dict = {}
+    weights = weights or [1.0] * len(lists)
+    for w, lst in zip(weights, lists):
+        for pos, d in enumerate(lst, 1):
+            key = _doc_key(d)
+            score[key] = score.get(key, 0.0) + w / (k + pos)
+            if key not in best or d.get("score", 0) > best[key].get("score", 0):
+                best[key] = d
+    return [best[key] for key in sorted(score, key=lambda x: -score[x])]
+
+
 def retrieve_documents(
     embed_model,
     pinecone_index,
@@ -639,6 +666,10 @@ def retrieve_documents(
     local_store=None,
     uid: str | None = None,
     retrieval_query: str | None = None,
+    k: int | None = None,
+    extra_queries: list[str] | None = None,
+    plan_future=None,
+    plan_deadline: float | None = None,
 ) -> list[dict]:
     """
     Recupera los fragmentos para una consulta. Busca con `retrieval_query` si se da.
@@ -647,6 +678,12 @@ def retrieve_documents(
       1. Espacio de nombres del usuario en Pinecone (uid): ficheros subidos
       2. FAISS (local_store): subidas efímeras de sesión (heredado)
       3. Corpus global, con referencia explícita y expansión por el grafo normativo
+
+    k: candidatos del corpus sin tope de 6 (modo unidades, src/context_builder.py).
+    extra_queries / plan_future: búsquedas adicionales del planificador
+          (src/agent/planner.py), fusionadas con la de la pregunta por rango recíproco.
+          Si se da el futuro, se espera como mucho hasta plan_deadline, DESPUÉS de lanzar
+          la búsqueda con la pregunta: el planificador corre en paralelo con ella.
     Devuelve [] si falla: la recuperación nunca tumba la petición (ARC-6).
     """
     search_text = retrieval_query or user_message
@@ -659,6 +696,7 @@ def retrieve_documents(
         and thread_id is not None
         and local_store.chunk_count(thread_id) > 0
     )
+    search_kw = {"top_k": k, "max_results": None} if k else {}
 
     try:
         # Always compute the embedding once — reused for both user-namespace and corpus search
@@ -683,10 +721,33 @@ def retrieve_documents(
             pine_docs: list[dict] = []
         else:
             cat_filter = detect_category_filter(search_text)
-            pine_docs = search_documents(pinecone_index, embedding, metadata_filter=cat_filter)
+            pine_docs = search_documents(pinecone_index, embedding, metadata_filter=cat_filter, **search_kw)
             if cat_filter and not pine_docs:
                 logger.info("RAG: category filter returned 0 results, retrying without filter")
-                pine_docs = search_documents(pinecone_index, embedding, metadata_filter=None)
+                pine_docs = search_documents(pinecone_index, embedding, metadata_filter=None, **search_kw)
+
+            # Búsquedas del planificador: en el vocabulario de la norma, sin filtro de
+            # categoría (el planificador puede saber mejor que las palabras clave de qué
+            # norma se trata), fusionadas con la de la pregunta.
+            queries = list(extra_queries or [])
+            if plan_future is not None:
+                from src.agent import planner
+                plan = planner.wait(plan_future, plan_deadline or 0.0)
+                if plan is not None:
+                    queries += plan.busquedas
+            queries = [q for q in dict.fromkeys(queries) if q and q != search_text]
+            if queries:
+                vecs = [generate_embedding(embed_model, q) for q in queries]
+                futures = [_SEARCH_POOL.submit(search_documents, pinecone_index, v, metadata_filter=None, **search_kw)
+                           for v in vecs]
+                extra = [f.result() for f in futures]
+                # La pregunta del usuario pesa tanto como todas las reformulaciones juntas:
+                # con peso igual, cuatro reformulaciones desplazaban lo que la pregunta ya
+                # encontraba bien (definiciones y cambios bajaban 15-20 puntos en la batería).
+                pine_docs = rrf_merge([pine_docs] + extra, weights=[float(len(extra))] + [1.0] * len(extra))
+                if k:
+                    pine_docs = pine_docs[:k]
+                logger.info("RAG: %d búsquedas del planificador fusionadas", len(queries))
 
             # Grafo normativo: añade fragmentos de las unidades a las que remiten los
             # recuperados («de conformidad con el artículo 8»). Solo si RAG_NORMATIVE_GRAPH
@@ -697,9 +758,8 @@ def retrieve_documents(
                 # delante, porque es lo que el usuario ha pedido literalmente.
                 direct = graph.explicit(pinecone_index, search_text, embedding, limit=_GRAPH_EXPAND)
                 if direct:
-                    seen = {(d["title"], (d.get("content") or "")[:80]) for d in direct}
-                    pine_docs = direct + [d for d in pine_docs
-                                          if (d.get("title"), (d.get("content") or "")[:80]) not in seen]
+                    seen = {_doc_key(d) for d in direct}
+                    pine_docs = direct + [d for d in pine_docs if _doc_key(d) not in seen]
                     logger.info("Grafo normativo: %d fragmentos por referencia explícita", len(direct))
             if graph is not None and pine_docs:
                 extra = graph.expand(pinecone_index, pine_docs, embedding, limit=_GRAPH_EXPAND)
@@ -760,12 +820,15 @@ def format_context(
             used_chars += len(chunk)
             used.append(dict(doc, index=i))
 
+        # Con bloques (src/context_builder.py) el extracto es el fragmento que se recuperó,
+        # no el principio del artículo.
+        excerpt = doc.get("excerpt") or content
         sources.append({
             "index": i,
             "title": title,
             "category": category,
             "score": round(score, 3),
-            "excerpt": content[:220] + ("…" if len(content) > 220 else ""),
+            "excerpt": excerpt[:220] + ("…" if len(excerpt) > 220 else ""),
             "page": page,
             "total_pages": total_pages,
             "page_end": page_end,
@@ -804,12 +867,19 @@ def _build_rag_message(
     model_name: str = _GEMINI_MODEL,
     uid: str | None = None,
     retrieval_query: str | None = None,
-) -> tuple[str, list[dict]]:
-    """Recupera y formatea en un paso. Se mantiene para quien no necesita el harness."""
+    return_used: bool = False,
+):
+    """Recupera y formatea en un paso, con el nivel de contexto por defecto (M). Se mantiene
+    para quien no necesita el harness (la batería en modo solo búsqueda, que pide además
+    los bloques que entraron en el contexto con return_used=True)."""
+    from src.context_builder import get_unit_store, build_blocks, clamp, CANDIDATE_K
+    store = get_unit_store()
     docs = retrieve_documents(embed_model, pinecone_index, user_message, thread_id=thread_id,
-                              local_store=local_store, uid=uid, retrieval_query=retrieval_query)
-    augmented, sources, _used = format_context(docs, user_message, model_name=model_name)
-    return augmented, sources
+                              local_store=local_store, uid=uid, retrieval_query=retrieval_query,
+                              k=CANDIDATE_K if store else None)
+    blocks = build_blocks(docs, clamp("M"), store)
+    augmented, sources, used = format_context(blocks, user_message, model_name=model_name)
+    return (augmented, sources, used) if return_used else (augmented, sources)
 
 
 def _diagnose(response) -> dict:
