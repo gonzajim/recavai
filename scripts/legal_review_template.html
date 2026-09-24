@@ -1,0 +1,794 @@
+<title>Evaluación jurídica de RecavAI</title>
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Spectral:ital,wght@0,400;0,500;0,600;1,400&family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;500&display=swap">
+<style>
+  :root{
+    --ground:#f5f2f3; --surface:#ffffff; --surface-2:#f0ebed; --surface-3:#e6dfe2;
+    --line:#ddd3d6; --line-strong:#c2b3b7;
+    --ink:#1d161a; --ink-2:#574a4f; --ink-3:#86767b;
+    --accent:#8C1B3A; --accent-deep:#6D142C; --accent-wash:#f8e7ec; --on-accent:#ffffff;
+    --ok:#2f6b47; --ok-wash:#e4efe7; --warn:#8a5a12; --warn-wash:#f7eddb; --risk:#a3321f; --risk-wash:#fae6e1;
+    --info:#2a5673; --info-wash:#e4edf3;
+    --shadow:0 1px 2px rgba(29,22,26,.05), 0 10px 24px -18px rgba(29,22,26,.3);
+    --f-display:'Spectral', Georgia, 'Times New Roman', serif;
+    --f-body:'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+    --f-mono:'JetBrains Mono', ui-monospace, SFMono-Regular, Consolas, monospace;
+  }
+  @media (prefers-color-scheme: dark){
+    :root:not([data-theme="light"]){
+      color-scheme:dark;
+      --ground:#161114; --surface:#1e171a; --surface-2:#271f23; --surface-3:#32282c;
+      --line:#3a2e33; --line-strong:#524047;
+      --ink:#f1e9eb; --ink-2:#bba9ae; --ink-3:#8c7c81;
+      --accent:#e38aa1; --accent-deep:#f3b2c1; --accent-wash:#3a1f28; --on-accent:#1d161a;
+      --ok:#82c49a; --ok-wash:#1c2e23; --warn:#dcae62; --warn-wash:#332818; --risk:#e8917b; --risk-wash:#38201b;
+      --info:#8fbbd6; --info-wash:#1a2a33;
+      --shadow:0 1px 2px rgba(0,0,0,.5), 0 12px 30px -18px rgba(0,0,0,.7);
+    }
+  }
+  :root[data-theme="dark"]{
+    color-scheme:dark;
+    --ground:#161114; --surface:#1e171a; --surface-2:#271f23; --surface-3:#32282c;
+    --line:#3a2e33; --line-strong:#524047;
+    --ink:#f1e9eb; --ink-2:#bba9ae; --ink-3:#8c7c81;
+    --accent:#e38aa1; --accent-deep:#f3b2c1; --accent-wash:#3a1f28; --on-accent:#1d161a;
+    --ok:#82c49a; --ok-wash:#1c2e23; --warn:#dcae62; --warn-wash:#332818; --risk:#e8917b; --risk-wash:#38201b;
+    --info:#8fbbd6; --info-wash:#1a2a33;
+    --shadow:0 1px 2px rgba(0,0,0,.5), 0 12px 30px -18px rgba(0,0,0,.7);
+  }
+  *{ box-sizing:border-box; }
+  body{ margin:0; background:var(--ground); color:var(--ink); font-family:var(--f-body); font-size:15px; line-height:1.6;
+        -webkit-font-smoothing:antialiased; padding:0 clamp(1rem,3.5vw,2rem); }
+  a{ color:var(--accent); }
+  :focus-visible{ outline:2px solid var(--accent); outline-offset:2px; border-radius:3px; }
+  @media (prefers-reduced-motion: reduce){ *{ transition:none !important; } }
+  .wrap{ max-width:1280px; margin:0 auto; }
+
+  /* masthead */
+  .mast{ padding-block:2.2rem 1.4rem; border-bottom:3px solid var(--accent); }
+  .eyebrow{ font-family:var(--f-mono); font-size:.7rem; letter-spacing:.15em; text-transform:uppercase; color:var(--accent); }
+  h1{ font-family:var(--f-display); font-weight:600; font-size:clamp(1.9rem,4.6vw,2.8rem); line-height:1.1; margin:.4rem 0 0; text-wrap:balance; }
+  .standfirst{ color:var(--ink-2); max-width:70ch; margin:.8rem 0 0; font-size:1.02rem; }
+  .facts{ display:flex; flex-wrap:wrap; gap:.4rem; margin-top:1.1rem; }
+  .fact{ font-family:var(--f-mono); font-size:.7rem; padding:.28rem .55rem; border:1px solid var(--line); border-radius:999px; background:var(--surface); color:var(--ink-2); }
+  .fact b{ color:var(--ink); font-weight:500; }
+
+  /* tabs */
+  .tabs{ position:sticky; top:env(safe-area-inset-top,0px); z-index:5; background:var(--ground); display:flex; gap:.25rem;
+         border-bottom:1px solid var(--line); overflow-x:auto; padding-top:.5rem; }
+  .tab{ appearance:none; border:none; background:none; font:500 .88rem var(--f-body); color:var(--ink-2); padding:.6rem .85rem;
+        border-bottom:2px solid transparent; cursor:pointer; white-space:nowrap; }
+  .tab[aria-selected="true"]{ color:var(--accent); border-bottom-color:var(--accent); }
+  .tab .count{ font-family:var(--f-mono); font-size:.72rem; color:var(--ink-3); margin-left:.3rem; }
+  .banner{ margin:1rem 0 0; padding:.7rem .9rem; border-radius:8px; font-size:.87rem; border:1px solid var(--line); background:var(--surface); }
+  .banner.warn{ background:var(--warn-wash); border-color:transparent; color:var(--ink); }
+  .banner.ok{ background:var(--ok-wash); border-color:transparent; }
+  .banner.info{ background:var(--info-wash); border-color:transparent; }
+
+  /* guide */
+  .guide{ max-width:74ch; padding-block:1.5rem 4rem; }
+  .guide h2{ font-family:var(--f-display); font-weight:600; font-size:1.5rem; margin:2.4rem 0 .6rem; text-wrap:balance; }
+  .guide h2:first-child{ margin-top:.5rem; }
+  .guide h3{ font-size:1rem; font-weight:600; margin:1.5rem 0 .4rem; }
+  .guide p, .guide li{ color:var(--ink); }
+  .guide li{ margin:.3rem 0; }
+  .lead{ font-family:var(--f-display); font-size:1.18rem; line-height:1.55; color:var(--ink); }
+  .scroll{ overflow-x:auto; margin:1rem 0; border:1px solid var(--line); border-radius:10px; background:var(--surface); }
+  table{ width:100%; border-collapse:collapse; font-size:.85rem; }
+  th{ text-align:left; font-family:var(--f-mono); font-size:.64rem; letter-spacing:.07em; text-transform:uppercase; color:var(--ink-3);
+      background:var(--surface-2); padding:.55rem .7rem; border-bottom:1px solid var(--line-strong); font-weight:500; }
+  td{ padding:.55rem .7rem; border-bottom:1px solid var(--line); vertical-align:top; }
+  tbody tr:last-child td{ border-bottom:none; }
+  .num{ font-family:var(--f-mono); font-variant-numeric:tabular-nums; text-align:right; white-space:nowrap; }
+  .note{ border-left:3px solid var(--accent); background:var(--accent-wash); padding:.8rem 1rem; border-radius:0 8px 8px 0; margin:1.2rem 0; }
+  .note b.label{ display:block; font-family:var(--f-mono); font-size:.66rem; letter-spacing:.1em; text-transform:uppercase; color:var(--accent); font-weight:500; margin-bottom:.25rem; }
+  .steps{ counter-reset:s; list-style:none; padding:0; }
+  .steps li{ counter-increment:s; position:relative; padding-left:2.2rem; margin:.7rem 0; }
+  .steps li::before{ content:counter(s); position:absolute; left:0; top:.05rem; width:1.5rem; height:1.5rem; border-radius:50%;
+                     background:var(--accent); color:var(--on-accent); font:600 .75rem/1.5rem var(--f-mono); text-align:center; }
+  .rubric td:first-child{ font-weight:600; min-width:9rem; }
+  .rubric .scale{ font-family:var(--f-mono); font-size:.78rem; color:var(--ink-2); }
+
+  /* annotate */
+  .desk{ display:grid; grid-template-columns:19rem minmax(0,1fr); gap:1.5rem; padding-block:1.2rem 4rem; align-items:start; }
+  @media (max-width:900px){ .desk{ grid-template-columns:1fr; } .index{ position:static; max-height:42vh; } }
+  .index{ position:sticky; top:calc(env(safe-area-inset-top,0px) + 3.4rem); max-height:calc(100vh - 4.5rem); overflow-y:auto;
+          background:var(--surface); border:1px solid var(--line); border-radius:10px; }
+  .filters{ padding:.7rem; border-bottom:1px solid var(--line); display:grid; gap:.5rem; background:var(--surface); position:sticky; top:0; z-index:1; }
+  .chips{ display:flex; flex-wrap:wrap; gap:.3rem; }
+  .chipbtn{ appearance:none; border:1px solid var(--line); background:var(--surface); color:var(--ink-2); border-radius:999px;
+            font:500 .75rem var(--f-body); padding:.25rem .6rem; cursor:pointer; }
+  .chipbtn[aria-pressed="true"]{ background:var(--accent); border-color:var(--accent); color:var(--on-accent); }
+  select, input[type="number"], input[type="text"], textarea{ font:inherit; font-size:.88rem; color:var(--ink); background:var(--surface);
+            border:1px solid var(--line-strong); border-radius:6px; padding:.4rem .5rem; width:100%; }
+  textarea{ min-height:4.2rem; resize:vertical; line-height:1.5; }
+  .qlist{ list-style:none; margin:0; padding:.3rem; }
+  .qitem{ display:grid; grid-template-columns:auto 1fr; gap:.1rem .55rem; padding:.5rem .5rem; border-radius:7px; cursor:pointer; border:1px solid transparent; }
+  .qitem:hover{ background:var(--surface-2); }
+  .qitem[aria-current="true"]{ background:var(--accent-wash); border-color:var(--accent); }
+  .qitem .dot{ grid-row:span 2; margin-top:.35rem; width:.65rem; height:.65rem; border-radius:50%; border:1.5px solid var(--ink-3); }
+  .dot.borrador{ background:var(--warn); border-color:var(--warn); }
+  .dot.completa{ background:var(--ok); border-color:var(--ok); }
+  .qitem .meta{ font-family:var(--f-mono); font-size:.68rem; color:var(--ink-3); }
+  .qitem .meta .star{ color:var(--accent); }
+  .qitem .txt{ font-size:.82rem; line-height:1.35; color:var(--ink); display:-webkit-box; -webkit-line-clamp:2; -webkit-box-orient:vertical; overflow:hidden; }
+
+  .dossier{ min-width:0; }
+  .dhead{ display:flex; flex-wrap:wrap; gap:.4rem; align-items:center; }
+  .tag{ font-family:var(--f-mono); font-size:.66rem; letter-spacing:.05em; text-transform:uppercase; padding:.18rem .45rem; border-radius:4px;
+        background:var(--surface-3); color:var(--ink-2); }
+  .tag.acc{ background:var(--accent-wash); color:var(--accent); }
+  .tag.info{ background:var(--info-wash); color:var(--info); }
+  .qid{ font-family:var(--f-mono); font-weight:500; font-size:.9rem; color:var(--accent); }
+  .question{ font-family:var(--f-display); font-size:1.45rem; line-height:1.35; margin:.6rem 0 1rem; text-wrap:pretty; }
+  .panel{ background:var(--surface); border:1px solid var(--line); border-radius:10px; padding:1rem 1.15rem; margin:1rem 0; box-shadow:var(--shadow); }
+  .ptitle{ font-family:var(--f-mono); font-size:.68rem; letter-spacing:.1em; text-transform:uppercase; color:var(--ink-3); margin:0 0 .6rem; display:flex; justify-content:space-between; gap:1rem; }
+  .answer{ font-size:.93rem; }
+  .answer p{ margin:.55rem 0; }
+  .answer ul, .answer ol{ padding-left:1.3rem; margin:.4rem 0; }
+  .answer li{ margin:.25rem 0; }
+  .answer hr{ border:none; border-top:1px solid var(--line); margin:1rem 0; }
+  .answer h5{ font-size:.95rem; margin:.9rem 0 .3rem; }
+  .cite{ font-family:var(--f-mono); font-size:.74rem; color:var(--accent); background:var(--accent-wash); border:none; border-radius:4px;
+         padding:0 .25rem; cursor:pointer; vertical-align:1px; }
+  .cite::before{ content:"["; } .cite::after{ content:"]"; }
+  .frag{ border:1px solid var(--line); border-radius:8px; margin:.5rem 0; background:var(--surface); }
+  .frag > summary{ cursor:pointer; padding:.55rem .75rem; list-style:none; display:grid; grid-template-columns:auto 1fr; gap:.1rem .6rem; }
+  .frag > summary::-webkit-details-marker{ display:none; }
+  .frag .fn{ font-family:var(--f-mono); color:var(--accent); font-weight:500; grid-row:span 2; }
+  .frag .ft{ font-size:.85rem; font-weight:500; }
+  .frag .fu{ font-size:.78rem; color:var(--ink-2); }
+  .frag .body{ border-top:1px solid var(--line); padding:.75rem; max-height:24rem; overflow:auto; white-space:pre-wrap; font-family:var(--f-display);
+               font-size:.93rem; line-height:1.55; background:var(--surface-2); }
+  .frag.flash{ border-color:var(--accent); box-shadow:0 0 0 3px var(--accent-wash); }
+
+  .field{ display:grid; grid-template-columns:minmax(0,15rem) minmax(0,1fr); gap:.4rem 1.2rem; padding:.85rem 0; border-top:1px solid var(--line); }
+  .field:first-of-type{ border-top:none; }
+  @media (max-width:640px){ .field{ grid-template-columns:1fr; } }
+  .field .fl{ font-weight:600; font-size:.9rem; }
+  .field .fq{ font-size:.82rem; color:var(--ink-2); margin-top:.15rem; }
+  .opts{ display:flex; flex-wrap:wrap; gap:.35rem; align-content:flex-start; }
+  .opt{ position:relative; }
+  .opt input{ position:absolute; opacity:0; inset:0; margin:0; cursor:pointer; }
+  .opt span{ display:block; border:1px solid var(--line-strong); border-radius:6px; padding:.35rem .6rem; font-size:.82rem; background:var(--surface); line-height:1.3; }
+  .opt span small{ display:block; font-size:.72rem; color:var(--ink-3); }
+  .opt input:checked + span{ background:var(--accent); border-color:var(--accent); color:var(--on-accent); }
+  .opt input:checked + span small{ color:var(--on-accent); opacity:.85; }
+  .opt input:focus-visible + span{ outline:2px solid var(--accent); outline-offset:2px; }
+  .opt.g input:checked + span{ background:var(--ok); border-color:var(--ok); }
+  .opt.w input:checked + span{ background:var(--warn); border-color:var(--warn); }
+  .opt.r input:checked + span{ background:var(--risk); border-color:var(--risk); }
+  .sub{ grid-column:2; }
+  @media (max-width:640px){ .sub{ grid-column:1; } }
+  .req{ color:var(--accent); }
+  details.ref{ margin:1rem 0; border:1px dashed var(--line-strong); border-radius:10px; background:var(--surface); }
+  details.ref > summary{ cursor:pointer; padding:.8rem 1rem; font-weight:600; }
+  details.ref > summary small{ display:block; font-weight:400; color:var(--ink-2); font-size:.82rem; }
+  details.ref .inner{ padding:0 1rem 1rem; }
+  .facts-list{ list-style:none; padding:0; margin:.4rem 0; }
+  .facts-list li{ display:grid; grid-template-columns:minmax(0,1fr) auto; gap:.3rem 1rem; padding:.55rem 0; border-top:1px solid var(--line); align-items:start; }
+  @media (max-width:640px){ .facts-list li{ grid-template-columns:1fr; } }
+  .footerbar{ display:flex; flex-wrap:wrap; gap:.6rem; align-items:center; justify-content:space-between; margin-top:1rem; }
+  .btn{ appearance:none; border:1px solid var(--line-strong); background:var(--surface); color:var(--ink); border-radius:7px; padding:.5rem .9rem;
+        font:500 .86rem var(--f-body); cursor:pointer; }
+  .btn.primary{ background:var(--accent); border-color:var(--accent); color:var(--on-accent); }
+  .btn:disabled{ opacity:.5; cursor:default; }
+  .saved{ font-family:var(--f-mono); font-size:.72rem; color:var(--ink-3); }
+  .saved.ok{ color:var(--ok); } .saved.warn{ color:var(--warn); }
+  .progress{ height:6px; background:var(--surface-3); border-radius:99px; overflow:hidden; }
+  .progress i{ display:block; height:100%; background:var(--ok); }
+  .kv{ display:grid; grid-template-columns:12rem minmax(0,1fr); gap:.5rem 1rem; align-items:center; }
+  @media (max-width:640px){ .kv{ grid-template-columns:1fr; } }
+  .muted{ color:var(--ink-3); font-size:.85rem; }
+  .section{ padding-block:1.5rem 4rem; max-width:980px; }
+  .section h2{ font-family:var(--f-display); font-weight:600; font-size:1.45rem; margin:.4rem 0 .6rem; }
+  .row{ display:flex; flex-wrap:wrap; gap:.5rem; align-items:center; }
+  .k-good{ color:var(--ok); } .k-mid{ color:var(--warn); } .k-bad{ color:var(--risk); }
+  .copybox{ width:100%; min-height:8rem; font-family:var(--f-mono); font-size:.72rem; }
+</style>
+
+<div class="wrap">
+  <header class="mast">
+    <div class="eyebrow">RECAVA-IA · Evaluación por expertos jurídicos</div>
+    <h1>Evaluación jurídica de RecavAI</h1>
+    <p class="standfirst">Un asistente automático responde preguntas sobre la CSDDD, la CSRD, las NEIS, los Estándares GRI y las guías de la OCDE citando los textos. Os pedimos que juzguéis sus respuestas como lo haría un revisor jurídico: si son correctas, completas y están bien fundamentadas.</p>
+    <div class="facts" id="facts"></div>
+  </header>
+
+  <nav class="tabs" role="tablist" aria-label="Secciones">
+    <button class="tab" role="tab" id="t-guia" aria-controls="v-guia" aria-selected="true">Guía</button>
+    <button class="tab" role="tab" id="t-anotar" aria-controls="v-anotar" aria-selected="false">Anotar<span class="count" id="c-anotar"></span></button>
+    <button class="tab" role="tab" id="t-mias" aria-controls="v-mias" aria-selected="false">Mis anotaciones</button>
+    <button class="tab" role="tab" id="t-coord" aria-controls="v-coord" aria-selected="false" hidden>Coordinación</button>
+  </nav>
+  <div id="banner"></div>
+
+  <!-- ============================ GUÍA ============================ -->
+  <section id="v-guia" role="tabpanel" aria-labelledby="t-guia" class="guide">
+    <h2>Qué es RecavAI</h2>
+    <p class="lead">RecavAI es un asistente conversacional del proyecto RECAVA-IA (Universidad de Castilla-La Mancha) para equipos de sostenibilidad, asesores y auditores. Responde preguntas sobre la normativa europea de diligencia debida e información corporativa en materia de sostenibilidad, y cada afirmación normativa debe ir acompañada de la cita del texto en que se apoya.</p>
+    <p>Tiene dos modos. En el <b>modo asesor</b>, el usuario pregunta y el sistema responde. En el <b>modo auditor</b>, el sistema entrevista a una empresa en ocho bloques y, cuando la empresa describe lo que hace, contrasta esa descripción con la norma y emite un veredicto: <i>cumple, cumple parcialmente, no cumple</i> o <i>no evaluable</i>. En esta evaluación veréis los dos.</p>
+
+    <h2>Qué textos consulta</h2>
+    <p>El asistente <b>solo puede fundamentar</b> en estos documentos. Si algo no está en ellos, debe decir que no consta. No incorpora legislación nacional de transposición (por ejemplo, la Ley 11/2018), jurisprudencia ni doctrina administrativa.</p>
+    <div class="scroll"><table>
+      <thead><tr><th>Documento</th><th>Versión</th><th>Rango</th></tr></thead>
+      <tbody>
+        <tr><td>CSDDD — Directiva (UE) 2024/1760, sobre diligencia debida de las empresas en materia de sostenibilidad</td><td>Consolidada a 18.03.2026, con las modificaciones de la Directiva (UE) 2025/794 («stop-the-clock») y de la Directiva (UE) 2026/470 (Ómnibus I)</td><td>Norma</td></tr>
+        <tr><td>CSRD — Directiva (UE) 2022/2464, sobre información corporativa en materia de sostenibilidad</td><td>Consolidada a 18.03.2026</td><td>Norma</td></tr>
+        <tr><td>NEIS (ESRS) — Reglamento Delegado (UE) 2023/2772</td><td>Versión publicada en el DOUE</td><td>Norma</td></tr>
+        <tr><td>Estándares GRI: universales (1, 2, 3), temáticos (101-418) y sectoriales (11 a 14)</td><td>41 documentos, versiones en español</td><td>Estándar voluntario</td></tr>
+        <tr><td>Guías de la OCDE: Líneas Directrices para Empresas Multinacionales (2023), Guía de Debida Diligencia para una Conducta Empresarial Responsable y guías sectoriales (textil y calzado, extractivo, minerales, agricultura, finanzas, deforestación)</td><td>11 documentos, versiones en español</td><td>Orientación</td></tr>
+        <tr><td>Glosario operativo y análisis de cambios de la CSDDD y la CSRD</td><td>Documentos internos del proyecto</td><td>Apoyo, no fuente</td></tr>
+        <tr><td>Marco teórico RECAVA y cuestionarios de auditoría</td><td>Documentos del proyecto</td><td>Apoyo, no fuente</td></tr>
+      </tbody>
+    </table></div>
+    <div class="note"><b class="label">Fecha de referencia</b>Juzgad las respuestas conforme a los textos <b>consolidados a 18 de marzo de 2026</b>, que son los que tiene el sistema. Si conocéis una modificación posterior, anotadla en el comentario, pero no penalicéis por ella la corrección de la respuesta.</div>
+
+    <h2>Cómo construye una respuesta</h2>
+    <ol class="steps">
+      <li><b>Localiza.</b> Busca en todos los documentos los pasajes más parecidos a la pregunta y los artículos a los que la pregunta se refiere expresamente («artículo 10 de la CSDDD», «E1-6», «GRI 305-1»).</li>
+      <li><b>Lee completo.</b> No lee trozos sueltos: amplía cada pasaje a su unidad completa (el artículo, el requisito de divulgación o el contenido GRI entero) y, si el artículo remite a otro, añade también ese.</li>
+      <li><b>Responde citando.</b> Cada dato normativo lleva una cita numerada, <span class="cite" style="cursor:default">[3]</span>, que corresponde a uno de los textos que tuvo delante. Veréis esos textos, íntegros, bajo cada respuesta.</li>
+      <li><b>Separa el consejo.</b> Lo que no sale de la norma (recomendaciones de gestión) va en una sección rotulada «Orientación práctica (no extraída de la normativa)».</li>
+      <li><b>Se controla a sí mismo.</b> Antes de entregar la respuesta, un control automático comprueba que cada cifra, fecha, artículo y número de norma aparece en el texto citado; si no, la reescribe. Si la pregunta menciona una norma que no está en el corpus o un artículo que no existe, se le avisa para que lo diga.</li>
+    </ol>
+    <p class="muted">Las respuestas que vais a juzgar son las que dio la versión en servicio (<span id="g-version"></span>), sin editar. Solo se ha quitado una etiqueta interna que el sistema citó una vez por error como si fuera una fuente, como hace ya el sistema en servicio.</p>
+
+    <h2>Lo que ya sabemos que falla</h2>
+    <ul>
+      <li>Las preguntas formuladas con palabras distintas de las de la norma («¿puedo cortar con un proveedor?» frente a «suspensión o terminación de la relación comercial») son las peor resueltas.</li>
+      <li>Un error jurídico <b>sin cifras ni artículos</b> —por ejemplo, afirmar que existirá una obligación que la norma no establece— no lo detecta ningún control automático. Es precisamente lo que necesitamos que busquéis.</li>
+      <li>Cuando se le pide redactar (una cláusula, un protocolo), tiende a resumir la norma en lugar de redactar.</li>
+      <li>A veces cita el apartado vecino del que contiene el dato.</li>
+    </ul>
+
+    <h2>Qué os pedimos y por qué</h2>
+    <p>Hasta ahora, la calidad de las respuestas la ha medido otro modelo de lenguaje que actúa como juez, contra una batería de 60 preguntas que escribió el equipo técnico. Ni ese juez ni esa batería tienen criterio jurídico propio. Vuestra valoración sirve para cuatro cosas:</p>
+    <ol>
+      <li>Saber si las respuestas son <b>jurídicamente correctas y útiles</b> para un profesional.</li>
+      <li><b>Corregir la batería</b>: cada pregunta trae una referencia (fuente esperada y datos clave) que no ha revisado ningún jurista.</li>
+      <li><b>Calibrar el juez automático</b>, comparando sus notas con las vuestras.</li>
+      <li>Preparar el <b>conjunto de referencia</b> del taller con juristas del instituto colaborador, que será la base del artículo científico.</li>
+    </ol>
+
+    <h2>Cómo anotar</h2>
+    <ol class="steps">
+      <li><b>Empezad por el bloque prioritario</b> (26 preguntas, dos de cada tipo). Si podéis, seguid con el resto. Cada pregunta lleva entre 5 y 10 minutos: unas 3 horas el bloque prioritario, unas 7 la batería completa. Se puede hacer en varias sesiones; lo anotado se guarda solo.</li>
+      <li><b>Leed la pregunta y la respuesta</b> como si os la hubiera entregado un colaborador. Desplegad los textos citados para comprobar las citas.</li>
+      <li><b>Valorad la respuesta</b> con la matriz (abajo). Los campos marcados con <span class="req">●</span> son necesarios para darla por terminada.</li>
+      <li><b>Después, y solo después</b>, abrid la referencia del equipo técnico y validadla. Así su contenido no condiciona vuestro juicio sobre la respuesta.</li>
+      <li><b>Trabajad de forma independiente.</b> No comentéis las preguntas entre vosotros hasta que todos hayáis terminado el bloque: necesitamos medir en qué coincidís y en qué no.</li>
+    </ol>
+
+    <h2 id="matriz">Matriz de anotación</h2>
+    <p>Siete preguntas sobre la respuesta (ocho en las verificaciones del modo auditor), una valoración global y la validación de la referencia.</p>
+    <div class="scroll"><table class="rubric">
+      <thead><tr><th>Dimensión</th><th>Qué se pregunta</th><th>Escala</th></tr></thead>
+      <tbody id="rubric-body"></tbody>
+    </table></div>
+    <h3>Validación de la referencia del equipo técnico</h3>
+    <div class="scroll"><table class="rubric">
+      <thead><tr><th>Dimensión</th><th>Qué se pregunta</th><th>Escala</th></tr></thead>
+      <tbody id="rubric-ref"></tbody>
+    </table></div>
+    <div class="note"><b class="label">Orientación práctica</b>Las secciones «Orientación práctica (no extraída de la normativa)» no llevan citas por diseño. No las tengáis en cuenta para la dimensión de citas, pero sí para la corrección y la gravedad si contienen un error jurídico.</div>
+
+    <h2>Qué se guarda y quién lo ve</h2>
+    <p>Se guardan vuestras valoraciones, comentarios y un perfil profesional breve (sin nombre), asociados a vuestra cuenta de Claude. <b>Los demás evaluadores no ven vuestras anotaciones</b>; solo las ve el coordinador del proyecto. Si la página no puede guardar en línea con vuestra cuenta, lo dirá arriba y guardará en este navegador; en ese caso, al terminar, enviad el fichero de «Mis anotaciones».</p>
+    <p><a href="#" id="go-annotate">Empezar a anotar →</a></p>
+  </section>
+
+  <!-- ============================ ANOTAR ============================ -->
+  <section id="v-anotar" role="tabpanel" aria-labelledby="t-anotar" hidden>
+    <div class="desk">
+      <aside class="index" aria-label="Preguntas">
+        <div class="filters">
+          <div class="chips" id="f-scope">
+            <button class="chipbtn" data-scope="prioritarias" aria-pressed="true">Prioritarias</button>
+            <button class="chipbtn" data-scope="todas" aria-pressed="false">Todas</button>
+            <button class="chipbtn" data-scope="pendientes" aria-pressed="false">Sin terminar</button>
+          </div>
+          <select id="f-tipo" aria-label="Tipo de pregunta"></select>
+          <div class="progress" title="Terminadas"><i id="prog-bar" style="width:0"></i></div>
+          <div class="muted" id="prog-txt"></div>
+        </div>
+        <ul class="qlist" id="qlist"></ul>
+      </aside>
+      <div class="dossier">
+        <div id="dossier"></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============================ MIS ANOTACIONES ============================ -->
+  <section id="v-mias" role="tabpanel" aria-labelledby="t-mias" class="section" hidden>
+    <h2>Perfil profesional</h2>
+    <p class="muted">Sirve para describir quiénes han evaluado en el informe. No se pide el nombre.</p>
+    <div class="panel"><div class="kv">
+      <label for="p-perfil">Perfil</label>
+      <select id="p-perfil"><option value="">—</option><option>Abogado/a en ejercicio</option><option>Académico/a o investigador/a</option><option>Auditor/a o consultor/a de sostenibilidad</option><option>Asesoría jurídica de empresa</option><option>Administración pública</option><option>Otro</option></select>
+      <label for="p-anos">Experiencia en Derecho de la UE o sostenibilidad</label>
+      <select id="p-anos"><option value="">—</option><option>Menos de 2 años</option><option>2 a 5 años</option><option>5 a 10 años</option><option>Más de 10 años</option></select>
+      <label for="p-esp">Especialidad</label>
+      <input type="text" id="p-esp" placeholder="p. ej., Derecho mercantil, derechos humanos y empresa">
+    </div></div>
+
+    <h2>Progreso</h2>
+    <div class="panel" id="mine-summary"></div>
+
+    <h2>Exportar</h2>
+    <p class="muted">Una copia de vuestras anotaciones, para guardarla o enviarla si la página no ha podido guardar en línea.</p>
+    <div class="row">
+      <button class="btn" id="exp-copy">Copiar como CSV</button>
+      <button class="btn" id="exp-copy-json">Copiar como JSON</button>
+      <button class="btn" id="exp-dl" hidden>Descargar CSV</button>
+      <span class="saved" id="exp-msg"></span>
+    </div>
+    <textarea class="copybox" id="exp-box" hidden readonly aria-label="Datos exportados"></textarea>
+  </section>
+
+  <!-- ============================ COORDINACIÓN ============================ -->
+  <section id="v-coord" role="tabpanel" aria-labelledby="t-coord" class="section" hidden>
+    <h2>Coordinación</h2>
+    <p class="muted">Solo la ve quien puede editar la página. Reúne las anotaciones de todos los evaluadores y calcula el acuerdo entre ellos.</p>
+    <div class="row"><button class="btn primary" id="co-load">Cargar anotaciones</button><button class="btn" id="co-csv" disabled>Copiar todo como CSV</button><button class="btn" id="co-dl" hidden disabled>Descargar CSV</button><span class="saved" id="co-msg"></span></div>
+    <textarea class="copybox" id="co-box" hidden readonly aria-label="Todas las anotaciones"></textarea>
+    <div id="co-out"></div>
+  </section>
+</div>
+
+<script type="application/json" id="datos">/*__DATOS__*/</script>
+<script>
+(() => {
+"use strict";
+const DATA = JSON.parse(document.getElementById("datos").textContent);
+const Q = DATA.preguntas;
+const BY = Object.fromEntries(Q.map(q => [q.id, q]));
+const $ = s => document.querySelector(s);
+const esc = s => String(s ?? "").replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+
+// ---------------------------------------------------------------- matriz
+const DIMS = [
+  {k:"correccion", l:"Corrección jurídica", q:"¿Es conforme a Derecho lo que afirma, según los textos vigentes a 18.03.2026?", req:true, o:[
+    ["2","Correcta","todo lo afirmado es conforme","g"],["1","Con imprecisiones","no alteran la conclusión ni la obligación","w"],["0","Incorrecta","algún error altera la conclusión, el alcance o la obligación","r"]]},
+  {k:"completitud", l:"Completitud", q:"¿Recoge lo esencial que un profesional esperaría para esta pregunta?", req:true, o:[
+    ["2","Completa","","g"],["1","Le falta algo relevante","","w"],["0","Omite lo esencial","","r"]]},
+  {k:"citas", l:"Fundamentación y citas", q:"¿Las citas [n] respaldan lo que se afirma? Desplegad los textos citados para comprobarlo.", req:true, o:[
+    ["2","Correctas","cada cita contiene lo afirmado","g"],["1","Alguna imprecisa","apartado vecino o cita genérica","w"],["0","Alguna no respalda","o remite a un texto que no dice eso","r"],["na","No procede","la respuesta no cita (abstención, saludo)",""]]},
+  {k:"sin_respaldo", l:"Afirmaciones sin respaldo", q:"¿Afirma algo que no dicen ni los textos citados ni la normativa aplicable?", req:true, o:[
+    ["no","No","","g"],["si","Sí","cópialo abajo","r"]], sub:{k:"sin_respaldo_texto", when:"si", ph:"Copia la afirmación o afirmaciones y, si puedes, di qué dice realmente la norma."}},
+  {k:"gravedad", l:"Gravedad del error más serio", q:"Si hay algún error, ¿qué consecuencias podría tener para quien siga la respuesta?", req:true, o:[
+    ["ninguno","Ninguno","","g"],["menor","Menor","forma, terminología","w"],["relevante","Relevante","induciría a una interpretación errónea","r"],["grave","Grave","podría llevar a incumplir una obligación o a una sanción","r"]]},
+  {k:"abstencion", l:"Abstención y premisas", q:"Si la respuesta dice que algo no consta, que un artículo o una norma no existe o corrige la premisa, ¿acierta?", req:false, o:[
+    ["acierta","Acierta","","g"],["innecesaria","No acierta","la normativa del corpus sí lo regula","r"],["na","No procede","no se abstiene ni corrige nada",""]]},
+  {k:"veredicto_ok", l:"Veredicto de cumplimiento", q:"¿Es correcto el veredicto (cumple / cumple parcialmente / no cumple / no evaluable)?", req:true, auditor:true, o:[
+    ["si","Correcto","","g"],["no","Incorrecto","indica cuál sería","r"]], sub:{k:"veredicto_correcto", when:"no", select:["cumple","cumple parcialmente","no cumple","no evaluable"]}},
+  {k:"utilidad", l:"Utilidad profesional", q:"¿Le serviría a un profesional que tiene que aplicar la norma?", req:true, o:[
+    ["util","Útil tal cual","","g"],["correcciones","Útil con correcciones","","w"],["no_util","No útil","","r"]]},
+  {k:"global", l:"Valoración global", q:"Si esta respuesta la hubiera redactado un colaborador, ¿la daríais por buena?", req:true, o:[
+    ["aceptable","Aceptable","sin cambios","g"],["menores","Con correcciones menores","","w"],["no_aceptable","No aceptable","","r"]]},
+];
+const REF_DIMS = [
+  {k:"ref_pregunta", l:"Pregunta", q:"¿Está bien planteada?", o:[["bien","Bien planteada","","g"],["ambigua","Ambigua","","w"],["error","Contiene un error","","r"]]},
+  {k:"ref_hechos", l:"Datos clave", q:"Para cada dato clave que una buena respuesta debería contener: ¿es correcto?", o:[["correcto","Correcto","","g"],["impreciso","Impreciso","","w"],["incorrecto","Incorrecto","","r"]]},
+  {k:"ref_falta", l:"Lo que falta", q:"¿Falta algún elemento esencial en la referencia?", text:true},
+  {k:"ref_fuente", l:"Fuente esperada", q:"¿La norma, el artículo y la página esperados son los adecuados?", o:[["adecuada","Adecuada","","g"],["inadecuada","Inadecuada","indica cuál","r"]]},
+];
+const OPT_LABEL = {};
+DIMS.concat(REF_DIMS).forEach(d => (d.o||[]).forEach(o => OPT_LABEL[d.k + ":" + o[0]] = o[1]));
+
+// ---------------------------------------------------------------- estado
+const LS_KEY = "recavai-juristas-v1";
+const S = { tab:"guia", scope:"prioritarias", tipo:"todos", current:null, ann:{}, profile:{},
+            mode:"local", uid:null, db:null, user:null, downloads:null, coord:false, coordData:null, profileWritten:false };
+try { const raw = JSON.parse(localStorage.getItem(LS_KEY) || "{}"); S.ann = raw.ann || {}; S.profile = raw.profile || {}; } catch (e) {}
+function lsSave(){ try { localStorage.setItem(LS_KEY, JSON.stringify({ann:S.ann, profile:S.profile})); } catch (e) {} }
+
+function required(q){ return DIMS.filter(d => d.req && (!d.auditor || q.modo === "auditor")); }
+function status(qid){
+  const a = S.ann[qid]; if (!a) return "vacia";
+  const q = BY[qid]; const r = a.r || {};
+  const any = Object.keys(r).length || a.comentario || (a.ref && Object.keys(a.ref).length);
+  if (!any) return "vacia";
+  return required(q).every(d => r[d.k] !== undefined && r[d.k] !== "") ? "completa" : "borrador";
+}
+function done(){ return Q.filter(q => status(q.id) === "completa").length; }
+
+// ---------------------------------------------------------------- cabecera y pestañas
+$("#facts").innerHTML = [
+  ["Preguntas", Q.length], ["Bloque prioritario", Q.filter(q => q.prioritaria).length],
+  ["Tipos", new Set(Q.map(q => q.tipo)).size], ["Textos", "consolidados a 18.03.2026"], ["Versión evaluada", DATA.version]
+].map(([k, v]) => `<span class="fact"><b>${esc(k)}</b> ${esc(v)}</span>`).join("");
+$("#g-version").textContent = DATA.version;
+
+function scale(d){ return (d.o || []).map(o => `<b>${esc(o[1])}</b>${o[2] ? " — " + esc(o[2]) : ""}`).join("<br>") || "Texto libre"; }
+$("#rubric-body").innerHTML = DIMS.map(d => `<tr><td>${esc(d.l)}${d.req ? ' <span class="req" title="Necesaria">●</span>' : ""}${d.auditor ? '<br><span class="muted">solo modo auditor</span>' : ""}</td><td>${esc(d.q)}</td><td class="scale">${scale(d)}</td></tr>`).join("");
+$("#rubric-ref").innerHTML = REF_DIMS.map(d => `<tr><td>${esc(d.l)}</td><td>${esc(d.q)}</td><td class="scale">${scale(d)}</td></tr>`).join("");
+
+function setTab(t){
+  S.tab = t;
+  for (const id of ["guia","anotar","mias","coord"]) {
+    $("#t-" + id).setAttribute("aria-selected", String(id === t));
+    $("#v-" + id).hidden = id !== t;
+  }
+  if (t === "anotar" && !S.current) openQ(visible()[0]?.id || Q[0].id, false);
+  if (t === "mias") renderMine();
+  try { localStorage.setItem(LS_KEY + ":tab", t); } catch (e) {}
+  window.scrollTo({top: 0});
+}
+for (const id of ["guia","anotar","mias","coord"]) $("#t-" + id).addEventListener("click", () => setTab(id));
+$("#go-annotate").addEventListener("click", e => { e.preventDefault(); setTab("anotar"); });
+
+// ---------------------------------------------------------------- índice
+const tipos = [...new Map(Q.map(q => [q.tipo, q.tipoLabel])).entries()];
+$("#f-tipo").innerHTML = `<option value="todos">Todos los tipos</option>` + tipos.map(([k, l]) => `<option value="${esc(k)}">${esc(l)}</option>`).join("");
+$("#f-tipo").addEventListener("change", e => { S.tipo = e.target.value; renderList(); });
+$("#f-scope").addEventListener("click", e => {
+  const b = e.target.closest("[data-scope]"); if (!b) return;
+  S.scope = b.dataset.scope;
+  $("#f-scope").querySelectorAll("[data-scope]").forEach(x => x.setAttribute("aria-pressed", String(x === b)));
+  renderList();
+});
+function visible(){
+  return Q.filter(q => (S.scope !== "prioritarias" || q.prioritaria) && (S.scope !== "pendientes" || status(q.id) !== "completa")
+                     && (S.tipo === "todos" || q.tipo === S.tipo));
+}
+function renderList(){
+  const vis = visible();
+  $("#qlist").innerHTML = vis.map(q => `<li class="qitem" data-q="${q.id}" aria-current="${q.id === S.current}" tabindex="0">
+      <span class="dot ${status(q.id)}" aria-hidden="true"></span>
+      <span class="meta">${q.id}${q.prioritaria ? ' <span class="star" title="Bloque prioritario">★</span>' : ""} · ${esc(q.tipoLabel)}</span>
+      <span class="txt">${esc(q.pregunta)}</span></li>`).join("") || `<li class="muted" style="padding:.8rem">Nada con este filtro.</li>`;
+  const n = done(), p = Q.filter(q => q.prioritaria), np = p.filter(q => status(q.id) === "completa").length;
+  $("#prog-bar").style.width = (100 * n / Q.length) + "%";
+  $("#prog-txt").textContent = `${n} de ${Q.length} terminadas · prioritarias ${np} de ${p.length}`;
+  $("#c-anotar").textContent = `${n}/${Q.length}`;
+}
+$("#qlist").addEventListener("click", e => { const li = e.target.closest("[data-q]"); if (li) openQ(li.dataset.q); });
+$("#qlist").addEventListener("keydown", e => { if (e.key === "Enter") { const li = e.target.closest("[data-q]"); if (li) openQ(li.dataset.q); } });
+
+// ---------------------------------------------------------------- respuesta (Markdown mínimo)
+function inline(s){
+  s = esc(s);
+  s = s.replace(/\*\*([^*]+?)\*\*/g, "<b>$1</b>").replace(/(^|[^*])\*([^*\s][^*]*?)\*(?!\*)/g, "$1<i>$2</i>");
+  s = s.replace(/\[(\d{1,3}(?:\s*[,;–-]\s*\d{1,3})*)\]/g, (m, g) =>
+    "[" + g.split(/(\s*[,;–-]\s*)/).map(t => /^\d+$/.test(t) ? `<button type="button" class="cite" data-n="${t}">${t}</button>` : t).join("") + "]");
+  return s.replace(/\[<button/g, "<button").replace(/<\/button>\]/g, "</button>");
+}
+function renderMarkdown(md){
+  const out = []; const stack = []; let para = [];
+  // Un salto de línea simple se respeta: el formato VEREDICTO / BRECHA / RECOMENDACIÓN / BASE
+  // del modo auditor va en líneas consecutivas.
+  const label = t => t.replace(/^(VEREDICTO|BRECHA|RECOMENDACIÓN|BASE):/, "<b>$1:</b>");
+  const flush = () => { if (para.length) { out.push("<p>" + para.map(t => label(inline(t))).join("<br>") + "</p>"); para = []; } };
+  const closeTo = lvl => { while (stack.length > lvl) out.push(`</li></${stack.pop()}>`); };
+  for (const raw of md.split("\n")) {
+    const line = raw.replace(/\s+$/, "");
+    const m = line.match(/^(\s*)([*-]|\d+\.)\s+(.*)$/);
+    if (m) {
+      flush();
+      const lvl = Math.floor(m[1].replace(/\t/g, "    ").length / 4) + 1, tag = /\d/.test(m[2]) ? "ol" : "ul";
+      if (stack.length < lvl) { while (stack.length < lvl) { out.push(`<${tag}><li>`); stack.push(tag); } }
+      else { closeTo(lvl); out.push("</li><li>"); }
+      out.push(inline(m[3])); continue;
+    }
+    if (!line.trim()) { flush(); closeTo(0); continue; }
+    if (/^\s*(---|\*\*\*)\s*$/.test(line)) { flush(); closeTo(0); out.push("<hr>"); continue; }
+    const h = line.match(/^\s*#{1,6}\s+(.*)$/);
+    if (h) { flush(); closeTo(0); out.push("<h5>" + inline(h[1]) + "</h5>"); continue; }
+    if (stack.length) { out.push(" " + inline(line.trim())); continue; }
+    para.push(line.trim());
+  }
+  flush(); closeTo(0);
+  return out.join("").replace(/<ul><li><\/li><li>/g, "<ul><li>");
+}
+
+// ---------------------------------------------------------------- expediente
+function optGroup(qid, d, val, prefix){
+  return `<div class="opts" role="radiogroup" aria-label="${esc(d.l)}">` + d.o.map(o => {
+    const id = `${prefix}-${qid}-${d.k}-${o[0]}`;
+    return `<label class="opt ${o[3] || ""}"><input type="radio" name="${prefix}-${qid}-${d.k}" id="${id}" value="${o[0]}" data-k="${d.k}" ${val === o[0] ? "checked" : ""}><span>${esc(o[1])}${o[2] ? `<small>${esc(o[2])}</small>` : ""}</span></label>`;
+  }).join("") + `</div>`;
+}
+function openQ(qid, scroll = true){
+  S.current = qid; renderList(); renderDossier();
+  if (scroll) window.scrollTo({top: $("#v-anotar").offsetTop - 60});
+}
+function renderDossier(){
+  const q = BY[S.current]; if (!q) return;
+  const a = S.ann[q.id] || {}; const r = a.r || {}; const ref = a.ref || {};
+  const dims = DIMS.filter(d => !d.auditor || q.modo === "auditor");
+  const fields = dims.map(d => {
+    let sub = "";
+    if (d.sub && d.sub.select) sub = `<div class="sub" ${r[d.k] === d.sub.when ? "" : "hidden"} data-sub="${d.k}"><label class="muted" for="s-${q.id}-${d.sub.k}">Veredicto correcto</label><select id="s-${q.id}-${d.sub.k}" data-k="${d.sub.k}"><option value="">—</option>${d.sub.select.map(v => `<option ${r[d.sub.k] === v ? "selected" : ""}>${v}</option>`).join("")}</select></div>`;
+    else if (d.sub) sub = `<div class="sub" ${r[d.k] === d.sub.when ? "" : "hidden"} data-sub="${d.k}"><textarea id="s-${q.id}-${d.sub.k}" data-k="${d.sub.k}" placeholder="${esc(d.sub.ph)}">${esc(r[d.sub.k] || "")}</textarea></div>`;
+    return `<div class="field"><div><div class="fl">${esc(d.l)}${d.req ? ' <span class="req" title="Necesaria">●</span>' : ""}</div><div class="fq">${esc(d.q)}</div></div>${optGroup(q.id, d, r[d.k], "r")}${sub}</div>`;
+  }).join("");
+  const R = q.referencia;
+  const fuentes = R.fuentes.length ? R.fuentes.map(f => `<li>${esc(f.titulo)}${f.articulo ? " · " + esc(f.articulo) : ""}${f.pagina ? " · p. " + esc(f.pagina) : ""}</li>`).join("") : "<li>Ninguna: la respuesta correcta es advertir de que no consta o de que la premisa es falsa.</li>";
+  const hechos = (R.hechos || []).map((h, i) => {
+    const d = {k:"ref_hechos_" + i, l:"Dato " + (i + 1), o:REF_DIMS[1].o};
+    return `<li><span>${esc(h)}</span>${optGroup(q.id, d, (ref.hechos || {})[i], "h")}</li>`;
+  }).join("");
+  const frags = q.citados.map(f => `<details class="frag" id="frag-${f.n}"><summary><span class="fn">[${f.n}]</span><span class="ft">${esc(f.titulo)}</span><span class="fu">${esc([f.unidad, f.paginas].filter(Boolean).join(" · "))}</span></summary><div class="body"></div></details>`).join("");
+  const idx = visible().findIndex(x => x.id === q.id);
+  $("#dossier").innerHTML = `
+    <div class="dhead"><span class="qid">${q.id}</span><span class="tag acc">${esc(q.tipoLabel)}</span>${q.prioritaria ? '<span class="tag">Bloque prioritario</span>' : ""}${q.real ? '<span class="tag info" title="Formulada por un usuario del sistema; sin datos identificativos">Pregunta real de un usuario</span>' : ""}</div>
+    <div class="question">${esc(q.pregunta)}</div>
+    ${q.modo === "auditor" ? `<div class="note"><b class="label">Verificación del modo auditor</b>El sistema recibe la descripción de lo que hace la empresa y debe decidir si cumple. Responde con el formato VEREDICTO / BRECHA / RECOMENDACIÓN / BASE.</div>` : ""}
+    <div class="panel"><div class="ptitle"><span>Respuesta de RecavAI</span><span>${q.citados.length} texto${q.citados.length === 1 ? "" : "s"} citado${q.citados.length === 1 ? "" : "s"}</span></div><div class="answer">${renderMarkdown(q.respuesta)}</div></div>
+    ${q.citados.length ? `<div class="ptitle" style="margin-top:1.2rem"><span>Textos citados (íntegros, tal como los tuvo delante)</span></div>${frags}` : ""}
+    <div class="panel" id="form-r"><div class="ptitle"><span>Vuestra valoración de la respuesta</span><a href="#matriz" id="see-rubric">ver criterios</a></div>${fields}</div>
+    <details class="ref" id="ref" ${Object.keys(ref).length ? "open" : ""}><summary>Referencia del equipo técnico<small>Abridla cuando hayáis valorado la respuesta. La escribió el equipo técnico y ningún jurista la ha revisado.</small></summary>
+      <div class="inner">
+        <div class="fl" style="margin-top:.4rem">Fuente esperada</div><ul>${fuentes}</ul>
+        ${R.veredicto ? `<p><b>Veredicto esperado:</b> ${esc(R.veredicto)}</p>` : ""}
+        ${R.nota ? `<p class="muted"><b>Nota:</b> ${esc(R.nota)}</p>` : ""}
+        ${hechos ? `<div class="fl">Datos clave</div><div class="fq">${esc(REF_DIMS[1].q)}</div><ul class="facts-list">${hechos}</ul>` : ""}
+        <div class="field"><div><div class="fl">${REF_DIMS[0].l}</div><div class="fq">${REF_DIMS[0].q}</div></div>${optGroup(q.id, REF_DIMS[0], ref.ref_pregunta, "f")}</div>
+        <div class="field"><div><div class="fl">${REF_DIMS[3].l}</div><div class="fq">${REF_DIMS[3].q}</div></div>${optGroup(q.id, REF_DIMS[3], ref.ref_fuente, "f")}
+          <div class="sub" ${ref.ref_fuente === "inadecuada" ? "" : "hidden"} data-sub="ref_fuente"><input type="text" id="f-${q.id}-ref_fuente_texto" data-k="ref_fuente_texto" placeholder="Norma, artículo y apartado adecuados" value="${esc(ref.ref_fuente_texto || "")}"></div></div>
+        <div class="field"><div><div class="fl">${REF_DIMS[2].l}</div><div class="fq">${REF_DIMS[2].q}</div></div><textarea id="f-${q.id}-ref_falta" data-k="ref_falta">${esc(ref.ref_falta || "")}</textarea></div>
+      </div></details>
+    <div class="panel"><div class="ptitle"><span>Notas</span></div>
+      <div class="field"><div><div class="fl">Respuesta correcta, en pocas líneas</div><div class="fq">Opcional. Alimentará el conjunto de referencia.</div></div><textarea id="n-${q.id}-propuesta" data-k="propuesta">${esc(a.propuesta || "")}</textarea></div>
+      <div class="field"><div><div class="fl">Comentario</div><div class="fq">Cualquier cosa que no recojan los campos anteriores.</div></div><textarea id="n-${q.id}-comentario" data-k="comentario">${esc(a.comentario || "")}</textarea></div>
+      <div class="field"><div><div class="fl">Minutos dedicados</div><div class="fq">Aproximado. Nos ayuda a planificar el taller.</div></div><input type="number" min="0" max="240" id="n-${q.id}-minutos" data-k="minutos" value="${esc(a.minutos ?? "")}"></div>
+    </div>
+    <div class="footerbar"><button class="btn" id="prev" ${idx <= 0 ? "disabled" : ""}>← Anterior</button><span class="saved" id="saved"></span><button class="btn primary" id="next" ${idx < 0 || idx >= visible().length - 1 ? "disabled" : ""}>Siguiente →</button></div>`;
+  showSaved();
+  // textos citados: se rellenan al abrir (hasta 140.000 caracteres por respuesta)
+  $("#dossier").querySelectorAll("details.frag").forEach(det => det.addEventListener("toggle", () => {
+    const body = det.querySelector(".body");
+    if (det.open && !body.textContent) body.textContent = q.citados.find(f => "frag-" + f.n === det.id).texto;
+  }));
+  $("#prev").onclick = () => { const v = visible(); const i = v.findIndex(x => x.id === q.id); if (i > 0) openQ(v[i - 1].id); };
+  $("#next").onclick = () => { const v = visible(); const i = v.findIndex(x => x.id === q.id); if (i >= 0 && i < v.length - 1) openQ(v[i + 1].id); };
+  $("#see-rubric").onclick = e => { e.preventDefault(); setTab("guia"); setTimeout(() => $("#matriz").scrollIntoView(), 0); };
+}
+$("#dossier").addEventListener("click", e => {
+  const c = e.target.closest(".cite"); if (!c) return;
+  const det = document.getElementById("frag-" + c.dataset.n); if (!det) return;
+  det.open = true; det.scrollIntoView({block: "center", behavior: "smooth"});
+  det.classList.add("flash"); setTimeout(() => det.classList.remove("flash"), 1400);
+});
+$("#dossier").addEventListener("change", onInput);
+$("#dossier").addEventListener("input", e => { if (e.target.matches("textarea, input[type=text], input[type=number]")) onInput(e); });
+function onInput(e){
+  const t = e.target, k = t.dataset.k; if (!k) return;
+  const qid = S.current; const a = S.ann[qid] = S.ann[qid] || {};
+  const val = t.type === "number" ? (t.value === "" ? null : Number(t.value)) : t.value;
+  if (k.startsWith("ref_hechos_")) { a.ref = a.ref || {}; a.ref.hechos = a.ref.hechos || {}; a.ref.hechos[k.slice(11)] = val; }
+  else if (k.startsWith("ref_")) { a.ref = a.ref || {}; a.ref[k] = val; }
+  else if (["propuesta","comentario","minutos"].includes(k)) a[k] = val;
+  else { a.r = a.r || {}; a.r[k] = val; }
+  const sub = $("#dossier").querySelector(`[data-sub="${k}"]`);
+  if (sub) { const d = DIMS.find(x => x.k === k); sub.hidden = d ? val !== d.sub.when : val !== "inadecuada"; }
+  schedule(qid, t.type === "radio" || t.tagName === "SELECT" ? 150 : 900);
+}
+
+// ---------------------------------------------------------------- guardado
+const timers = {}, chains = {}; let lastSaved = null, saveState = "idle";
+function schedule(qid, ms){
+  const a = S.ann[qid]; a.qid = qid; a.actualizado = new Date().toISOString(); a.estado = status(qid);
+  lsSave(); renderList(); saveState = "pending"; showSaved();
+  clearTimeout(timers[qid]); timers[qid] = setTimeout(() => flush(qid), ms);
+}
+function body(qid){ return JSON.parse(JSON.stringify(Object.assign({v: 1}, S.ann[qid]))); }
+function flush(qid){
+  if (S.mode !== "db") { saveState = "local"; lastSaved = new Date(); showSaved(); return; }
+  chains[qid] = (chains[qid] || Promise.resolve()).then(async () => {
+    try {
+      await writeDoc(`anotaciones/${S.uid}/preguntas/${qid}`, body(qid));
+      if (!S.profileWritten) await writeProfile();
+      saveState = "db"; lastSaved = new Date();
+    } catch (e) { writeFailed(e); }
+    showSaved();
+  });
+}
+async function writeDoc(path, data){
+  try { await S.db.doc(path).set(data); }
+  catch (e) {
+    if (e && e.code === "unavailable") { await new Promise(r => setTimeout(r, 600 + Math.random() * 900)); await S.db.doc(path).set(data); }
+    else throw e;
+  }
+}
+async function writeProfile(){
+  await writeDoc(`anotaciones/${S.uid}`, {perfil: S.profile.perfil || "", anos: S.profile.anos || "", especialidad: S.profile.especialidad || "",
+                                           terminadas: done(), actualizado: new Date().toISOString()});
+  S.profileWritten = true;
+}
+function writeFailed(e){
+  console.warn("No se pudo guardar en línea", e);
+  if (e && e.code === "quota_exceeded") banner("warn", "La página ha llegado a su límite de datos. Tus anotaciones siguen en este navegador: expórtalas desde «Mis anotaciones».");
+  else banner("warn", "La página no puede guardar en línea con tu cuenta (probablemente tienes permiso de solo lectura). Tus anotaciones se guardan en este navegador: al terminar, expórtalas desde «Mis anotaciones» y envíalas al coordinador.");
+  S.mode = "local"; saveState = "local"; lastSaved = new Date();
+}
+function showSaved(){
+  const el = $("#saved"); if (!el) return;
+  const t = lastSaved ? lastSaved.toLocaleTimeString("es-ES", {hour: "2-digit", minute: "2-digit"}) : "";
+  const st = status(S.current);
+  const mark = st === "completa" ? "Terminada" : st === "borrador" ? "Sin terminar" : "Sin empezar";
+  el.className = "saved " + (saveState === "db" ? "ok" : saveState === "local" ? "warn" : "");
+  el.textContent = mark + " · " + (saveState === "pending" ? "guardando…" : saveState === "db" ? `guardado en línea ${t}` : saveState === "local" ? `guardado en este navegador ${t}` : "");
+}
+function banner(kind, text){ $("#banner").innerHTML = `<div class="banner ${kind}"></div>`; $("#banner .banner").textContent = text; }
+
+// ---------------------------------------------------------------- perfil y exportación
+for (const [id, key] of [["#p-perfil","perfil"],["#p-anos","anos"],["#p-esp","especialidad"]]) {
+  const el = $(id); el.value = S.profile[key] || "";
+  el.addEventListener("change", async () => {
+    S.profile[key] = el.value; lsSave();
+    if (S.mode === "db") { try { await writeProfile(); } catch (e) { writeFailed(e); } }
+  });
+}
+function renderMine(){
+  const n = done(), p = Q.filter(q => q.prioritaria), np = p.filter(q => status(q.id) === "completa").length;
+  const br = Q.filter(q => status(q.id) === "borrador").map(q => q.id);
+  $("#mine-summary").innerHTML = `<div class="progress"><i style="width:${100 * n / Q.length}%"></i></div>
+    <p><b>${n}</b> de ${Q.length} preguntas terminadas · bloque prioritario <b>${np}</b> de ${p.length}.</p>
+    ${br.length ? `<p class="muted">Sin terminar: ${br.map(id => `<a href="#" data-open="${id}">${id}</a>`).join(", ")}</p>` : ""}
+    <p class="muted">${S.mode === "db" ? "Se guardan en línea con tu cuenta." : "Se guardan en este navegador."}</p>`;
+}
+$("#mine-summary").addEventListener("click", e => { const a = e.target.closest("[data-open]"); if (a) { e.preventDefault(); setTab("anotar"); openQ(a.dataset.open); } });
+
+const COLS = ["anotador","perfil","anos","especialidad","pregunta","tipo","prioritaria","estado",
+  ...DIMS.flatMap(d => d.sub ? [d.k, d.sub.k] : [d.k]), "ref_pregunta","ref_hechos","ref_fuente","ref_fuente_texto","ref_falta",
+  "propuesta","comentario","minutos","actualizado"];
+function rowOf(anotador, prof, a){
+  const q = BY[a.qid] || {}; const r = a.r || {}; const ref = a.ref || {};
+  const hechos = Object.entries(ref.hechos || {}).sort((x, y) => x[0] - y[0]).map(([i, v]) => `${+i + 1}:${v}`).join("|");
+  const base = {anotador, perfil: prof.perfil || "", anos: prof.anos || "", especialidad: prof.especialidad || "",
+    pregunta: a.qid, tipo: q.tipo || "", prioritaria: q.prioritaria ? "sí" : "no", estado: a.estado || "",
+    ref_pregunta: ref.ref_pregunta || "", ref_hechos: hechos, ref_fuente: ref.ref_fuente || "", ref_fuente_texto: ref.ref_fuente_texto || "",
+    ref_falta: ref.ref_falta || "", propuesta: a.propuesta || "", comentario: a.comentario || "", minutos: a.minutos ?? "", actualizado: a.actualizado || ""};
+  DIMS.forEach(d => { base[d.k] = r[d.k] ?? ""; if (d.sub) base[d.sub.k] = r[d.sub.k] ?? ""; });
+  return base;
+}
+function toCSV(rows){
+  const cell = v => { const s = String(v ?? ""); return /[",;\n\r]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s; };
+  return "﻿" + [COLS.join(","), ...rows.map(r => COLS.map(c => cell(r[c])).join(","))].join("\r\n");
+}
+function myRows(){ return Object.values(S.ann).filter(a => a && a.qid && status(a.qid) !== "vacia").map(a => rowOf("yo", S.profile, a)); }
+async function copyText(text, box, msg){
+  try { await navigator.clipboard.writeText(text); msg.textContent = "Copiado."; box.hidden = true; }
+  catch (e) { box.hidden = false; box.value = text; box.focus(); box.select(); msg.textContent = "Selecciona el texto y cópialo."; }
+}
+$("#exp-copy").onclick = () => copyText(toCSV(myRows()), $("#exp-box"), $("#exp-msg"));
+$("#exp-copy-json").onclick = () => copyText(JSON.stringify({perfil: S.profile, anotaciones: Object.values(S.ann).filter(a => a && a.qid)}, null, 1), $("#exp-box"), $("#exp-msg"));
+async function download(name, text, msg){
+  try { await S.downloads.save({filename: name, data: text}); msg.textContent = "Descargado."; }
+  catch (e) { msg.textContent = e && e.code === "declined" ? "Descarga cancelada." : "No se pudo descargar; usa «Copiar»."; }
+}
+$("#exp-dl").onclick = () => download("anotaciones_recavai.csv", toCSV(myRows()), $("#exp-msg"));
+
+// ---------------------------------------------------------------- coordinación
+const AGREE = ["correccion","completitud","citas","sin_respaldo","gravedad","utilidad","global","veredicto_ok"];
+function kappa(pairs){
+  const n = pairs.length; if (n < 2) return null;
+  const po = pairs.filter(([a, b]) => a === b).length / n;
+  const cats = [...new Set(pairs.flat())]; let pe = 0;
+  for (const c of cats) pe += (pairs.filter(p => p[0] === c).length / n) * (pairs.filter(p => p[1] === c).length / n);
+  return {po, k: pe >= 1 ? null : (po - pe) / (1 - pe), n};
+}
+$("#co-load").onclick = async () => {
+  const msg = $("#co-msg"); msg.textContent = "Cargando…";
+  try {
+    const anns = await S.db.collection("anotaciones").get();
+    const people = [];
+    for (const d of anns.docs) {
+      const items = await S.db.collection(`anotaciones/${d.id}/preguntas`).get();
+      people.push({uid: d.id, perfil: d.data() || {}, ann: Object.fromEntries(items.docs.map(x => [x.id, x.data()]))});
+    }
+    const names = S.user ? await S.user.profiles(people.map(p => p.uid)) : {};
+    S.coordData = {people, names};
+    renderCoord(); msg.textContent = `${people.length} evaluador${people.length === 1 ? "" : "es"}.`;
+    $("#co-csv").disabled = false; $("#co-dl").disabled = false;
+  } catch (e) { msg.textContent = "No se pudieron cargar: " + (e && e.code || "error"); }
+};
+function stOf(q, a){
+  if (!a) return "vacia"; const r = a.r || {};
+  return required(q).every(d => r[d.k] !== undefined && r[d.k] !== "") ? "completa" : "borrador";
+}
+function renderCoord(){
+  const {people, names} = S.coordData;
+  const who = p => (names[p.uid] && names[p.uid].name) || "Evaluador " + (people.indexOf(p) + 1);
+  const rowsP = people.map(p => {
+    const n = Q.filter(q => stOf(q, p.ann[q.id]) === "completa").length;
+    const np = Q.filter(q => q.prioritaria && stOf(q, p.ann[q.id]) === "completa").length;
+    return `<tr><td>${esc(who(p))}</td><td>${esc(p.perfil.perfil || "—")}</td><td>${esc(p.perfil.anos || "—")}</td><td class="num">${n}</td><td class="num">${np}</td></tr>`;
+  }).join("");
+  // cobertura por pregunta y valoración global
+  const cov = Q.map(q => {
+    const vals = people.map(p => p.ann[q.id]).filter(a => stOf(q, a) === "completa").map(a => a.r.global);
+    const c = {aceptable: 0, menores: 0, no_aceptable: 0}; vals.forEach(v => c[v] = (c[v] || 0) + 1);
+    return {q, n: vals.length, c};
+  });
+  // acuerdo por pares
+  const agree = AGREE.map(k => {
+    const ks = [], all = [];
+    for (let i = 0; i < people.length; i++) for (let j = i + 1; j < people.length; j++) {
+      const pairs = Q.filter(q => (k !== "veredicto_ok" || q.modo === "auditor")).map(q => [people[i].ann[q.id], people[j].ann[q.id], q])
+        .filter(([a, b, q]) => stOf(q, a) === "completa" && stOf(q, b) === "completa")
+        .map(([a, b]) => [a.r[k], b.r[k]]).filter(([x, y]) => x && y && x !== "na" && y !== "na");
+      const r = kappa(pairs); if (r) { ks.push(r); all.push(...pairs); }
+    }
+    const n = all.length, po = n ? all.filter(([a, b]) => a === b).length / n : null;
+    const kk = ks.map(r => r.k).filter(x => x !== null);
+    return {k, n, po, kappa: kk.length ? kk.reduce((a, b) => a + b, 0) / kk.length : null};
+  });
+  const kcls = v => v === null ? "" : v >= .6 ? "k-good" : v >= .4 ? "k-mid" : "k-bad";
+  const label = k => (DIMS.find(d => d.k === k) || {}).l || k;
+  $("#co-out").innerHTML = `
+    <h3>Evaluadores</h3><div class="scroll"><table><thead><tr><th>Evaluador</th><th>Perfil</th><th>Experiencia</th><th class="num">Terminadas</th><th class="num">Prioritarias</th></tr></thead><tbody>${rowsP || '<tr><td colspan="5" class="muted">Nadie ha anotado todavía.</td></tr>'}</tbody></table></div>
+    <h3>Acuerdo entre evaluadores</h3>
+    <p class="muted">Acuerdo observado y κ de Cohen medio sobre cada par de evaluadores, en las preguntas que ambos han terminado. Orientativo: κ ≥ 0,6 bueno, 0,4-0,6 moderado. El objetivo del protocolo del taller es κ ≥ 0,70.</p>
+    <div class="scroll"><table><thead><tr><th>Dimensión</th><th class="num">Pares de juicios</th><th class="num">Acuerdo</th><th class="num">κ medio</th></tr></thead><tbody>
+      ${agree.map(a => `<tr><td>${esc(label(a.k))}</td><td class="num">${a.n}</td><td class="num">${a.po === null ? "—" : Math.round(100 * a.po) + " %"}</td><td class="num ${kcls(a.kappa)}">${a.kappa === null ? "—" : a.kappa.toFixed(2).replace(".", ",")}</td></tr>`).join("")}
+    </tbody></table></div>
+    <h3>Valoración global por pregunta</h3>
+    <div class="scroll"><table><thead><tr><th>Pregunta</th><th>Tipo</th><th class="num">Evaluadores</th><th class="num">Aceptable</th><th class="num">Correcciones menores</th><th class="num">No aceptable</th></tr></thead><tbody>
+      ${cov.map(({q, n, c}) => `<tr><td><span class="qid">${q.id}</span>${q.prioritaria ? " ★" : ""} ${esc(q.pregunta.slice(0, 80))}</td><td>${esc(q.tipoLabel)}</td><td class="num">${n}</td><td class="num">${c.aceptable || ""}</td><td class="num">${c.menores || ""}</td><td class="num">${c.no_aceptable || ""}</td></tr>`).join("")}
+    </tbody></table></div>`;
+}
+function allRows(){
+  const {people, names} = S.coordData;
+  return people.flatMap((p, i) => Object.values(p.ann).filter(a => a && a.qid).map(a => rowOf((names[p.uid] && names[p.uid].name) || "Evaluador " + (i + 1), p.perfil, a)));
+}
+$("#co-csv").onclick = () => copyText(toCSV(allRows()), $("#co-box"), $("#co-msg"));
+$("#co-dl").onclick = () => download("anotaciones_recavai_todas.csv", toCSV(allRows()), $("#co-msg"));
+
+// ---------------------------------------------------------------- arranque
+let startTab = "guia";
+try { startTab = localStorage.getItem(LS_KEY + ":tab") || "guia"; } catch (e) {}
+if (/^#(anotar|guia|mias)$/.test(location.hash)) startTab = location.hash.slice(1);
+renderList();
+setTab(["guia","anotar","mias"].includes(startTab) ? startTab : "guia");
+banner("info", "Conectando para guardar tus anotaciones en línea… Mientras tanto se guardan en este navegador.");
+
+(async function connect(){
+  if (!(window.claude && window.claude.use)) { banner("warn", "Esta copia de la página no puede guardar en línea. Tus anotaciones se guardan en este navegador: al terminar, expórtalas desde «Mis anotaciones»."); return; }
+  const [user, db, downloads] = await Promise.all([claude.use("user"), claude.use("db"), claude.use("downloads")]);
+  S.user = user; S.downloads = downloads;
+  if (downloads) { $("#exp-dl").hidden = false; $("#co-dl").hidden = false; }
+  const me = user ? await user.me() : null;
+  S.uid = me && me.id;
+  const canWrite = user ? await user.can("data.write") : null;
+  if (!db || !S.uid) { banner("warn", "No se ha podido identificar tu cuenta para guardar en línea. Tus anotaciones se guardan en este navegador: al terminar, expórtalas desde «Mis anotaciones» y envíalas al coordinador."); return; }
+  S.db = db; S.mode = "db";
+  S.coord = !!(me.isOwner || me.canEdit);
+  $("#t-coord").hidden = !S.coord;
+  $("#banner").innerHTML = "";
+  if (canWrite === false) banner("info", "Tu acceso a esta página es de solo lectura para los datos compartidos; tus propias anotaciones sí se guardan en línea si la página lo permite. Si ves un aviso al guardar, exporta al terminar.");
+  try {
+    const prof = await db.doc(`anotaciones/${S.uid}`).get();
+    if (prof.exists) { const p = prof.data(); S.profile = Object.assign({}, p, S.profile.perfil ? S.profile : {}); ["#p-perfil","#p-anos","#p-esp"].forEach((id, i) => $(id).value = S.profile[["perfil","anos","especialidad"][i]] || ""); }
+  } catch (e) {}
+  let first = true;
+  db.collection(`anotaciones/${S.uid}/preguntas`).onSnapshot(snap => {
+    const toPush = [], changed = new Set();
+    for (const d of snap.docs) {
+      if (d.metadata.hasPendingWrites) continue;
+      const remote = d.data(); const local = S.ann[d.id];
+      if (!local || (remote.actualizado || "") > (local.actualizado || "")) { S.ann[d.id] = JSON.parse(JSON.stringify(remote)); changed.add(d.id); }
+    }
+    if (first) {                                 // anotaciones hechas antes de conectar: subirlas
+      first = false;
+      const remoteIds = new Set(snap.docs.map(d => d.id));
+      for (const [qid, a] of Object.entries(S.ann)) {
+        const r = snap.docs.find(d => d.id === qid);
+        if (status(qid) !== "vacia" && (!remoteIds.has(qid) || (a.actualizado || "") > ((r && r.data().actualizado) || ""))) toPush.push(qid);
+      }
+    }
+    lsSave(); renderList();
+    // Solo si ha cambiado la pregunta abierta (p. ej., desde otra pestaña): volver a pintar
+    // cerraría los textos citados que el evaluador tenga abiertos.
+    const editing = document.activeElement && $("#dossier").contains(document.activeElement);
+    if (S.tab === "anotar" && changed.has(S.current) && !editing) renderDossier();
+    if (S.tab === "mias") renderMine();
+    toPush.forEach(flush);
+  }, err => writeFailed(err));
+})();
+})();
+</script>

@@ -67,6 +67,10 @@ python scripts/eval_battery.py split-draft X --out X.borrador         # borrador
 python scripts/eval_battery.py add-critical X [--fragments-from Y]    # métrica `criticos` sin llamadas
 python scripts/eval_battery.py rescore X                              # recalcula hechos_ctx, criticos, cita_ok sin llamadas
 
+# Página de evaluación jurídica (guía para juristas + mesa de anotación de las 60
+# preguntas con las respuestas de una ejecución y sus textos citados)
+python scripts/build_legal_review.py --run H7 --out results/juristas/evaluacion_juridica.html
+
 # Latencia según tamaño de contexto y razonamiento (~40 llamadas, ~0,3 $)
 python scripts/probe_latency.py --out results/contexto/latencia.jsonl
 ```
